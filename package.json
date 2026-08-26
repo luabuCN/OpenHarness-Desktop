@@ -1,0 +1,20 @@
+{
+  "name": "openharness-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,tauri -c cyan,yellow \"pnpm --filter server dev\" \"pnpm exec tauri dev\"",
+    "dev:api": "pnpm --filter server dev",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm -r build",
+    "build:desktop": "node scripts/prepare-sidecar.mjs && pnpm exec tauri build",
+    "sidecar:build": "node scripts/prepare-sidecar.mjs",
+    "db:push": "pnpm --filter server db:push",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "concurrently": "^9.0.0"
+  }
+}

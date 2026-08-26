@@ -1,0 +1,7 @@
+[http]
+timeout = 60
+proxy = "http://127.0.0.1:7890"
+multiplexing = false
+
+[registries.crates-io]
+protocol = "sparse"

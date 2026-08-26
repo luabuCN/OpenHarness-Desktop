@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+*.tsbuildinfo
+server/sidecar/
+server/sea/
+server/.local-data*/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+src-tauri/target/
