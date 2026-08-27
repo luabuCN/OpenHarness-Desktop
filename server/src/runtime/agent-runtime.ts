@@ -3,7 +3,7 @@ import { Agent } from "@mastra/core/agent";
 import { TokenLimiterProcessor } from "@mastra/core/processors";
 import { convertToModelMessages, createUIMessageStreamResponse } from "ai";
 import { config, skillsDir } from "../env.js";
-import { getProviderRevision } from "../providers/provider-service.js";
+import { getProviderRevision, type ModelSelection } from "../providers/provider-service.js";
 import type { ChatUIMessage } from "../chat-types.js";
 import { createModel } from "./model.js";
 import { createToolRegistry } from "./tools.js";
@@ -24,14 +24,15 @@ interface CachedRuntime extends AgentRuntime {
 }
 
 export class AgentRuntimeService {
-  private readonly runtimes = new Map<ThinkingMode, CachedRuntime>();
+  private readonly runtimes = new Map<string, CachedRuntime>();
 
-  async get(mode: ThinkingMode): Promise<AgentRuntime> {
+  async get(mode: ThinkingMode, selection?: ModelSelection): Promise<AgentRuntime> {
     const revision = getProviderRevision();
-    const cached = this.runtimes.get(mode);
+    const cacheKey = `${mode}|${selection ? `${selection.providerId}:${selection.modelId}` : "default"}`;
+    const cached = this.runtimes.get(cacheKey);
     if (cached && cached.revision === revision) return cached;
 
-    const model = await createModel(mode);
+    const model = await createModel(mode, selection);
     const registry = createToolRegistry();
     const tools = registry.toToolSet();
     const maxSteps = mode === "deep" ? 120 : 80;
@@ -66,12 +67,12 @@ export class AgentRuntimeService {
     });
 
     const runtime: CachedRuntime = { agent, maxSteps, revision };
-    this.runtimes.set(mode, runtime);
+    this.runtimes.set(cacheKey, runtime);
     return runtime;
   }
 
-  async stream(mode: ThinkingMode, messages: ChatUIMessage[], signal?: AbortSignal) {
-    const { agent, maxSteps } = await this.get(mode);
+  async stream(mode: ThinkingMode, messages: ChatUIMessage[], signal?: AbortSignal, selection?: ModelSelection) {
+    const { agent, maxSteps } = await this.get(mode, selection);
     const modelMessages = await convertToModelMessages(messages, {
       ignoreIncompleteToolCalls: true,
     });

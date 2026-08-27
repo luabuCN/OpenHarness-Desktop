@@ -9,6 +9,9 @@ const chatRequestSchema = z.object({
   id: z.string().min(1).optional(),
   messages: z.array(z.custom<ChatUIMessage>()).min(1),
   thinkingMode: z.string().refine(isThinkingMode).default("fast"),
+  model: z
+    .object({ providerId: z.string().min(1), modelId: z.string().min(1) })
+    .optional(),
 });
 
 export const chatRoutes = new Hono();
@@ -18,5 +21,5 @@ chatRoutes.post("/", async (c) => {
   const sessionId = body.id ?? crypto.randomUUID();
   const thinkingMode = isThinkingMode(body.thinkingMode) ? body.thinkingMode : "fast";
   await sessionRepository.ensureFromMessages(sessionId, body.messages);
-  return streamConversation(thinkingMode, body.messages, c.req.raw.signal);
+  return streamConversation(thinkingMode, body.messages, c.req.raw.signal, body.model);
 });

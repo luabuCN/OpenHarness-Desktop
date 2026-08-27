@@ -1,10 +1,15 @@
 import { prisma } from "../db.js";
-import { config } from "../env.js";
 
 export interface ProviderModel {
   id: string;
   name: string;
   enabled: boolean;
+  isCustom?: boolean;
+  reasoning?: boolean;
+  tool_call?: boolean;
+  release_date?: string;
+  limit?: { context?: number; output?: number };
+  modalities?: { input?: string[]; output?: string[] };
 }
 
 export interface ProviderView {
@@ -33,10 +38,8 @@ export interface ResolvedModelConfig {
   apiKey?: string;
   model: string;
   providerName: string;
-  source: "provider" | "env";
+  source: "provider";
 }
-
-export const DEFAULT_MODEL_SETTING_KEY = "defaultModel";
 
 /**
  * Bumped on every mutation so the agent runtime can cheaply detect that the
@@ -59,11 +62,36 @@ function parseModels(raw: string | null): ProviderModel[] {
         (entry): entry is Record<string, unknown> =>
           typeof entry === "object" && entry !== null && typeof (entry as { id?: unknown }).id === "string",
       )
-      .map((entry) => ({
-        id: String(entry.id),
-        name: typeof entry.name === "string" ? entry.name : String(entry.id),
-        enabled: entry.enabled !== false,
-      }));
+      .map((entry) => {
+        const model: ProviderModel = {
+          id: String(entry.id),
+          name: typeof entry.name === "string" ? entry.name : String(entry.id),
+          enabled: entry.enabled !== false,
+        };
+        if (typeof entry.isCustom === "boolean") model.isCustom = entry.isCustom;
+        if (typeof entry.reasoning === "boolean") model.reasoning = entry.reasoning;
+        if (typeof entry.tool_call === "boolean") model.tool_call = entry.tool_call;
+        if (typeof entry.release_date === "string") model.release_date = entry.release_date;
+        if (typeof entry.limit === "object" && entry.limit !== null) {
+          const rawLimit = entry.limit as { context?: unknown; output?: unknown };
+          model.limit = {
+            ...(typeof rawLimit.context === "number" ? { context: rawLimit.context } : {}),
+            ...(typeof rawLimit.output === "number" ? { output: rawLimit.output } : {}),
+          };
+        }
+        if (typeof entry.modalities === "object" && entry.modalities !== null) {
+          const rawModalities = entry.modalities as { input?: unknown; output?: unknown };
+          model.modalities = {
+            ...(Array.isArray(rawModalities.input)
+              ? { input: rawModalities.input.filter((value): value is string => typeof value === "string") }
+              : {}),
+            ...(Array.isArray(rawModalities.output)
+              ? { output: rawModalities.output.filter((value): value is string => typeof value === "string") }
+              : {}),
+          };
+        }
+        return model;
+      });
   } catch {
     return [];
   }
@@ -131,18 +159,6 @@ export async function updateProvider(id: string, input: Partial<ProviderInput>):
 
 export async function deleteProvider(id: string): Promise<void> {
   await prisma.provider.delete({ where: { id } });
-  // Drop a dangling default-model reference pointing at this provider.
-  const raw = await prisma.appSetting.findUnique({ where: { key: DEFAULT_MODEL_SETTING_KEY } });
-  if (raw) {
-    try {
-      const setting = JSON.parse(raw.value) as { providerId?: string };
-      if (setting.providerId === id) {
-        await prisma.appSetting.delete({ where: { key: DEFAULT_MODEL_SETTING_KEY } });
-      }
-    } catch {
-      // Ignore malformed settings; they get overwritten on the next save.
-    }
-  }
   revision += 1;
 }
 
@@ -186,62 +202,51 @@ export async function fetchRemoteModels(
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-export interface DefaultModelSetting {
+export interface ModelSelection {
   providerId: string;
   modelId: string;
 }
 
-export async function getDefaultModelSetting(): Promise<DefaultModelSetting | null> {
-  const raw = await prisma.appSetting.findUnique({ where: { key: DEFAULT_MODEL_SETTING_KEY } });
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw.value) as DefaultModelSetting;
-    if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") return parsed;
-    return null;
-  } catch {
-    return null;
+/**
+ * Resolve an explicit per-request model selection (provider + model chosen
+ * in the chat prompt input). The provider must exist and be active.
+ */
+export async function resolveSelectionConfig(selection: ModelSelection): Promise<ResolvedModelConfig> {
+  const provider = await prisma.provider.findUnique({ where: { id: selection.providerId } });
+  if (!provider?.isActive) {
+    throw new Error("所选供应商不可用，请在设置中检查供应商配置");
   }
-}
-
-export async function setDefaultModelSetting(setting: DefaultModelSetting | null): Promise<void> {
-  if (setting === null) {
-    await prisma.appSetting.delete({ where: { key: DEFAULT_MODEL_SETTING_KEY } }).catch(() => undefined);
-  } else {
-    await prisma.appSetting.upsert({
-      where: { key: DEFAULT_MODEL_SETTING_KEY },
-      update: { value: JSON.stringify(setting) },
-      create: { key: DEFAULT_MODEL_SETTING_KEY, value: JSON.stringify(setting) },
-    });
-  }
-  revision += 1;
+  return {
+    baseURL: provider.apiBase,
+    apiKey: provider.apiKey ?? undefined,
+    model: selection.modelId,
+    providerName: provider.name,
+    source: "provider",
+  };
 }
 
 /**
- * Resolve the model the agent runtime should use. A saved default model
- * (provider + model chosen in settings) wins; otherwise fall back to the
- * environment configuration, mirroring aime-chat's getLanguageModel fallback
- * to createOpenAICompatible with the provider's apiBase/apiKey.
+ * Resolve the model the agent runtime should use when a request carries no
+ * explicit selection. Models always come from the saved provider
+ * configuration (never from .env): the first enabled model of the first
+ * active provider wins. Throws when nothing is configured so callers can
+ * surface a clear "configure a provider" error.
  */
 export async function resolveModelConfig(): Promise<ResolvedModelConfig> {
-  const setting = await getDefaultModelSetting();
-  if (setting) {
-    const provider = await prisma.provider.findUnique({ where: { id: setting.providerId } });
-    if (provider?.isActive) {
+  const providers = await prisma.provider.findMany({ orderBy: { createdAt: "asc" } });
+  for (const provider of providers) {
+    if (!provider.isActive) continue;
+    const firstEnabled = parseModels(provider.models).find((model) => model.enabled);
+    if (firstEnabled) {
       return {
         baseURL: provider.apiBase,
         apiKey: provider.apiKey ?? undefined,
-        model: setting.modelId,
+        model: firstEnabled.id,
         providerName: provider.name,
         source: "provider",
       };
     }
   }
 
-  return {
-    baseURL: config.baseURL,
-    apiKey: config.apiKey,
-    model: config.model,
-    providerName: "openharness",
-    source: "env",
-  };
+  throw new Error("未配置模型：请在设置中添加模型供应商并选择默认模型");
 }

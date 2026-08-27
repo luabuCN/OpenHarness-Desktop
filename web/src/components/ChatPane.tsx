@@ -1,7 +1,12 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
 import type { ChatUIMessage } from "@/lib/chat-utils";
-import { BrainIcon, CpuIcon, LoaderCircleIcon } from "lucide-react";
+import {
+  BrainIcon,
+  LoaderCircleIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
+} from "lucide-react";
 import {
   Conversation,
   ConversationContent,
@@ -16,11 +21,6 @@ import {
   PromptInputActionMenuTrigger,
   PromptInputBody,
   PromptInputFooter,
-  PromptInputSelect,
-  PromptInputSelectContent,
-  PromptInputSelectItem,
-  PromptInputSelectTrigger,
-  PromptInputSelectValue,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
@@ -33,10 +33,10 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { Badge } from "@/components/ui/badge";
-import { Spinner } from "@/components/ui/spinner";
-import type { ThinkingMode } from "@/api";
+import { Button } from "@/components/ui/button";
+import type { ModelSelection, ProviderInfo, ThinkingMode } from "@/api";
 import { MessageView } from "./MessageView";
+import { ModelSelector } from "./ModelSelector";
 
 const SUGGESTIONS = [
   "List the files in my workspace",
@@ -47,21 +47,29 @@ const SUGGESTIONS = [
 export interface ChatPaneProps {
   chat: UseChatHelpers<ChatUIMessage>;
   title: string;
-  model?: string;
+  providers: ProviderInfo[];
+  selection: ModelSelection | null;
+  onSelectionChange: (selection: ModelSelection) => void;
   thinkingMode: ThinkingMode;
   onThinkingModeChange: (mode: ThinkingMode) => void;
   selectedToolId?: string;
   onToolSelect: (id: string) => void;
+  panelOpen: boolean;
+  onTogglePanel: () => void;
 }
 
 export function ChatPane({
   chat,
   title,
-  model,
+  providers,
+  selection,
+  onSelectionChange,
   thinkingMode,
   onThinkingModeChange,
   selectedToolId,
   onToolSelect,
+  panelOpen,
+  onTogglePanel,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
   const waiting = busy && !hasVisibleAssistantWork(chat.messages);
@@ -80,18 +88,19 @@ export function ChatPane({
     <section className="flex min-w-0 flex-1 flex-col bg-background">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-4">
         <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
-        <div className="flex shrink-0 items-center gap-2">
-          {model ? (
-            <Badge variant="outline" className="gap-1 font-normal">
-              <CpuIcon className="size-3" />
-              {model}
-            </Badge>
-          ) : null}
-          <Badge variant={busy ? "default" : "secondary"} className="gap-1">
-            {busy ? <Spinner className="size-3 animate-spin" /> : null}
-            {busy ? "Working" : "Ready"}
-          </Badge>
-        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onTogglePanel}
+          title={panelOpen ? "Collapse panel" : "Expand panel"}
+          aria-label={panelOpen ? "Collapse panel" : "Expand panel"}
+        >
+          {panelOpen ? (
+            <PanelRightCloseIcon className="size-4" />
+          ) : (
+            <PanelRightOpenIcon className="size-4" />
+          )}
+        </Button>
       </header>
 
       <Conversation>
@@ -169,23 +178,11 @@ export function ChatPane({
                 <BrainIcon className="size-4" />
                 <span>深度思考</span>
               </PromptInputButton>
-              {model ? (
-                <PromptInputSelect value={model}>
-                  <PromptInputSelectTrigger
-                    aria-label="Select model"
-                    className="h-8 gap-1.5 px-2.5"
-                    size="sm"
-                  >
-                    <CpuIcon className="size-4" />
-                    <PromptInputSelectValue />
-                  </PromptInputSelectTrigger>
-                  <PromptInputSelectContent>
-                    <PromptInputSelectItem value={model}>
-                      {model}
-                    </PromptInputSelectItem>
-                  </PromptInputSelectContent>
-                </PromptInputSelect>
-              ) : null}
+              <ModelSelector
+                providers={providers}
+                value={selection}
+                onChange={onSelectionChange}
+              />
             </PromptInputTools>
             <PromptInputSubmit
               status={chat.status}

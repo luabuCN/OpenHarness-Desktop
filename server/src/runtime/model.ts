@@ -1,5 +1,9 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { resolveModelConfig } from "../providers/provider-service.js";
+import {
+  resolveModelConfig,
+  resolveSelectionConfig,
+  type ModelSelection,
+} from "../providers/provider-service.js";
 import { agentProfiles, type ThinkingMode } from "./types.js";
 
 type ChatModel = ReturnType<
@@ -21,12 +25,19 @@ type ChatModel = ReturnType<
  * forking the SDK.
  *
  * Base URL / API key / model id are resolved per request-epoch from the
- * provider settings (same fallback idea as aime-chat's ProvidersManager):
- * a default model chosen in settings wins, otherwise the .env gateway.
+ * saved provider configuration (same idea as aime-chat's ProvidersManager):
+ * an explicit selection from the chat prompt input wins, otherwise the first
+ * enabled model of the first active provider. .env is never consulted for
+ * models.
  */
-async function createModelForMode(mode: ThinkingMode): Promise<ChatModel> {
+async function createModelForMode(
+  mode: ThinkingMode,
+  selection?: ModelSelection,
+): Promise<ChatModel> {
   const { enableThinking } = agentProfiles[mode];
-  const resolved = await resolveModelConfig();
+  const resolved = selection
+    ? await resolveSelectionConfig(selection)
+    : await resolveModelConfig();
   const provider = createOpenAICompatible({
     name: resolved.providerName,
     baseURL: resolved.baseURL,
@@ -51,6 +62,9 @@ async function createModelForMode(mode: ThinkingMode): Promise<ChatModel> {
   return provider.languageModel(resolved.model);
 }
 
-export function createModel(mode: ThinkingMode): Promise<ChatModel> {
-  return createModelForMode(mode);
+export function createModel(
+  mode: ThinkingMode,
+  selection?: ModelSelection,
+): Promise<ChatModel> {
+  return createModelForMode(mode, selection);
 }

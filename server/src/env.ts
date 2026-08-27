@@ -29,9 +29,6 @@ if (!process.env.DATABASE_URL) {
 export const config = {
   host: process.env.HOST ?? "127.0.0.1",
   port: Number(process.env.PORT ?? process.env.OPENHARNESS_PORT ?? 8787),
-  apiKey: process.env.OPENAI_API_KEY,
-  baseURL: process.env.OPENAI_BASE_URL ?? "http://192.168.40.113:8088/v1",
-  model: process.env.OPENAI_MODEL ?? "qwen3.8-max",
   enableBash: process.env.OPENHARNESS_ENABLE_BASH === "true",
   contextWindow: Number(process.env.OPENHARNESS_CONTEXT_WINDOW ?? 128_000),
 };

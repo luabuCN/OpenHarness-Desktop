@@ -8,11 +8,19 @@ export const healthRoutes = new Hono();
 
 healthRoutes.get("/", async (c) => {
   await prisma.$queryRaw`select 1`;
-  const resolved = await resolveModelConfig();
+  let model: string | undefined;
+  let modelSource = "none";
+  try {
+    const resolved = await resolveModelConfig();
+    model = resolved.model;
+    modelSource = resolved.source;
+  } catch {
+    // No provider configured yet; the web UI shows the settings page instead.
+  }
   return c.json({
     status: "ok",
-    model: resolved.model,
-    modelSource: resolved.source,
+    model,
+    modelSource,
     workspace: true,
     bash: config.enableBash,
     capabilities: agentCapabilities,

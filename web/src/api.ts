@@ -9,7 +9,8 @@ export interface SessionSummary {
 
 export interface HealthInfo {
   status: string;
-  model: string;
+  model?: string;
+  modelSource?: string;
   workspace: boolean;
   bash: boolean;
 }
@@ -54,6 +55,12 @@ export interface ProviderModel {
   id: string;
   name: string;
   enabled: boolean;
+  isCustom?: boolean;
+  reasoning?: boolean;
+  tool_call?: boolean;
+  release_date?: string;
+  limit?: { context?: number; output?: number };
+  modalities?: { input?: string[]; output?: string[] };
 }
 
 export interface ProviderInfo {
@@ -83,7 +90,7 @@ export interface ProviderInput {
   models?: ProviderModel[];
 }
 
-export interface DefaultModelSetting {
+export interface ModelSelection {
   providerId: string;
   modelId: string;
 }
@@ -119,17 +126,4 @@ export function updateProvider(id: string, input: Partial<ProviderInput>): Promi
 
 export function deleteProvider(id: string): Promise<void> {
   return apiFetch(`/api/providers/${id}`, { method: "DELETE" }).then(() => undefined);
-}
-
-export function getDefaultModel(): Promise<DefaultModelSetting | null> {
-  return apiFetch<{ setting: DefaultModelSetting | null }>("/api/providers/default-model").then(
-    (data) => data.setting,
-  );
-}
-
-export function setDefaultModel(setting: DefaultModelSetting | null): Promise<void> {
-  return apiFetch("/api/providers/default-model", {
-    method: "PUT",
-    body: JSON.stringify(setting),
-  }).then(() => undefined);
 }

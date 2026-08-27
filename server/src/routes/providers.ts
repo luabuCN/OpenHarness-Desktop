@@ -5,9 +5,7 @@ import {
   createProvider,
   deleteProvider,
   fetchRemoteModels,
-  getDefaultModelSetting,
   listProviders,
-  setDefaultModelSetting,
   updateProvider,
 } from "../providers/provider-service.js";
 
@@ -17,6 +15,16 @@ const modelSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   enabled: z.boolean(),
+  isCustom: z.boolean().optional(),
+  reasoning: z.boolean().optional(),
+  tool_call: z.boolean().optional(),
+  release_date: z.string().optional(),
+  limit: z
+    .object({ context: z.number().optional(), output: z.number().optional() })
+    .optional(),
+  modalities: z
+    .object({ input: z.array(z.string()).optional(), output: z.array(z.string()).optional() })
+    .optional(),
 });
 
 const providerInputSchema = z.object({
@@ -42,19 +50,6 @@ providerRoutes.post("/fetch-models", async (c) => {
     .parse(await c.req.json());
   const models = await fetchRemoteModels(body.apiBase, body.apiKey);
   return c.json({ models });
-});
-
-providerRoutes.get("/default-model", async (c) => {
-  return c.json({ setting: await getDefaultModelSetting() });
-});
-
-providerRoutes.put("/default-model", async (c) => {
-  const body = z
-    .object({ providerId: z.string().min(1), modelId: z.string().min(1) })
-    .nullable()
-    .parse(await c.req.json());
-  await setDefaultModelSetting(body);
-  return c.json({ ok: true });
 });
 
 providerRoutes.post("/", async (c) => {

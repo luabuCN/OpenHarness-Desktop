@@ -37,6 +37,7 @@ export interface RightPanelProps {
   onTabChange: (tab: RightTab) => void;
   selectedToolId?: string;
   onToolSelect: (id: string) => void;
+  width: number;
 }
 
 export function RightPanel({
@@ -45,32 +46,36 @@ export function RightPanel({
   onTabChange,
   selectedToolId,
   onToolSelect,
+  width,
 }: RightPanelProps) {
   return (
-    <aside className="hidden w-[400px] shrink-0 flex-col border-l bg-background lg:flex">
+    <aside
+      className="hidden min-w-0 shrink-0 flex-col bg-background lg:flex"
+      style={{ width }}
+    >
       <Tabs
         value={tab}
         onValueChange={(value) => onTabChange(value as RightTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="h-auto w-full shrink-0 justify-start gap-1 rounded-none border-b bg-transparent px-2 py-1.5">
-          <TabsTrigger value="files" className="gap-1.5 text-xs">
+        <TabsList className="group-data-[orientation=horizontal]/tabs:h-14 w-full shrink-0 justify-start gap-1 rounded-none border-b bg-transparent px-2">
+          <TabsTrigger value="files" className="h-8 gap-1.5 text-xs">
             <FolderOpenIcon className="size-3.5" />
             Files
           </TabsTrigger>
-          <TabsTrigger value="todos" className="gap-1.5 text-xs">
+          <TabsTrigger value="todos" className="h-8 gap-1.5 text-xs">
             <ListTodoIcon className="size-3.5" />
             Todo List
           </TabsTrigger>
-          <TabsTrigger value="preview" className="gap-1.5 text-xs">
+          <TabsTrigger value="preview" className="h-8 gap-1.5 text-xs">
             <GlobeIcon className="size-3.5" />
             Preview
           </TabsTrigger>
-          <TabsTrigger value="tools" className="gap-1.5 text-xs">
+          <TabsTrigger value="tools" className="h-8 gap-1.5 text-xs">
             <WrenchIcon className="size-3.5" />
             Tool Result
           </TabsTrigger>
-          <TabsTrigger value="usage" className="gap-1.5 text-xs">
+          <TabsTrigger value="usage" className="h-8 gap-1.5 text-xs">
             <BarChart3Icon className="size-3.5" />
             Usage
           </TabsTrigger>
