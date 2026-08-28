@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { FolderOpen, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 
 import {
-  createProject,
   deleteProject,
   listAgents,
   listProjects,
@@ -23,28 +22,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Item, ItemActions, ItemContent, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Sheet,
   SheetContent,
-  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
-
-const NONE = "__none__";
+import { ProjectForm } from "./ProjectForm";
 
 interface ProjectsSectionProps {
   onChanged?: () => void;
@@ -59,14 +46,6 @@ export function ProjectsSection({ onChanged }: ProjectsSectionProps) {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ProjectInfo | null>(null);
   const [deleting, setDeleting] = useState<ProjectInfo | null>(null);
-  const [name, setName] = useState("");
-  const [rootPath, setRootPath] = useState("");
-  const [description, setDescription] = useState("");
-  const [agentId, setAgentId] = useState("");
-  const [providerId, setProviderId] = useState("");
-  const [modelId, setModelId] = useState("");
-  const [isActive, setIsActive] = useState(true);
-  const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -93,44 +72,8 @@ export function ProjectsSection({ onChanged }: ProjectsSectionProps) {
 
   function openForm(project: ProjectInfo | null) {
     setEditing(project);
-    setName(project?.name ?? "");
-    setRootPath(project?.rootPath ?? "");
-    setDescription(project?.description ?? "");
-    setAgentId(project?.defaultAgentId ?? "");
-    setProviderId(project?.defaultProviderId ?? "");
-    setModelId(project?.defaultModelId ?? "");
-    setIsActive(project?.isActive ?? true);
     setError(undefined);
     setFormOpen(true);
-  }
-
-  async function save() {
-    if (!name.trim() || !rootPath.trim()) {
-      setError("项目名称和路径不能为空");
-      return;
-    }
-    setSaving(true);
-    setError(undefined);
-    const payload = {
-      name: name.trim(),
-      rootPath: rootPath.trim(),
-      description: description.trim() || undefined,
-      defaultAgentId: agentId || null,
-      defaultProviderId: providerId || null,
-      defaultModelId: providerId ? modelId || null : null,
-      isActive,
-    };
-    try {
-      if (editing) await updateProject(editing.id, payload);
-      else await createProject(payload);
-      setFormOpen(false);
-      await refresh();
-      onChanged?.();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存失败");
-    } finally {
-      setSaving(false);
-    }
   }
 
   async function toggleActive(project: ProjectInfo, nextActive: boolean) {
@@ -158,10 +101,6 @@ export function ProjectsSection({ onChanged }: ProjectsSectionProps) {
       setError(cause instanceof Error ? cause.message : "删除失败");
     }
   }
-
-  const selectedProvider = providers.find((provider) => provider.id === providerId);
-  const activeAgents = agents.filter((agent) => agent.isActive);
-  const activeProviders = providers.filter((provider) => provider.isActive);
 
   return (
     <div className="flex h-full flex-col">
@@ -227,100 +166,19 @@ export function ProjectsSection({ onChanged }: ProjectsSectionProps) {
           <SheetHeader>
             <SheetTitle>{editing ? "编辑项目" : "添加项目"}</SheetTitle>
           </SheetHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4">
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="project-name">名称</FieldLabel>
-                <Input id="project-name" value={name} onChange={(event) => setName(event.target.value)} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="project-root">本地路径</FieldLabel>
-                <Input
-                  id="project-root"
-                  value={rootPath}
-                  onChange={(event) => setRootPath(event.target.value)}
-                  placeholder="E:\path\to\project"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="project-description">描述</FieldLabel>
-                <Textarea
-                  id="project-description"
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                />
-              </Field>
-              <Field>
-                <FieldLabel>默认 Agent</FieldLabel>
-                <Select value={agentId || NONE} onValueChange={(next) => setAgentId(next === NONE ? "" : next)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>全局默认</SelectItem>
-                    {activeAgents.map((agent) => (
-                      <SelectItem key={agent.id} value={agent.id}>
-                        {agent.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel>默认模型</FieldLabel>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Select
-                    value={providerId || NONE}
-                    onValueChange={(next) => {
-                      setProviderId(next === NONE ? "" : next);
-                      setModelId("");
-                    }}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择供应商" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={NONE}>全局默认</SelectItem>
-                      {activeProviders.map((provider) => (
-                        <SelectItem key={provider.id} value={provider.id}>
-                          {provider.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={modelId || NONE}
-                    onValueChange={(next) => setModelId(next === NONE ? "" : next)}
-                    disabled={!providerId}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择模型" />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-72">
-                      <SelectItem value={NONE}>全局默认</SelectItem>
-                      {(selectedProvider?.models ?? [])
-                        .filter((model) => model.enabled)
-                        .map((model) => (
-                          <SelectItem key={model.id} value={model.id}>
-                            {model.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </Field>
-              <Field orientation="horizontal">
-                <FieldLabel>启用</FieldLabel>
-                <Switch checked={isActive} onCheckedChange={setIsActive} />
-              </Field>
-            </FieldGroup>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+            {formOpen ? (
+              <ProjectForm
+                key={editing?.id ?? "new"}
+                editing={editing}
+                onSaved={() => {
+                  setFormOpen(false);
+                  void refresh();
+                  onChanged?.();
+                }}
+              />
+            ) : null}
           </div>
-          <SheetFooter className="mt-0 gap-2 p-4">
-            <Button onClick={() => void save()} disabled={saving}>
-              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-              保存
-            </Button>
-          </SheetFooter>
         </SheetContent>
       </Sheet>
 

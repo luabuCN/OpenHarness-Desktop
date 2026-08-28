@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -22,10 +22,11 @@ import type { ThinkingMode } from "./api";
 import { ChatPane } from "./components/ChatPane";
 import { defaultModelSelection } from "./components/ModelSelector";
 import { RightPanel, type RightTab } from "./components/RightPanel";
-import { Sidebar } from "./components/Sidebar";
+import { AppSidebar } from "./components/AppSidebar";
+import { SidebarPeekZone } from "./components/SidebarPeekTrigger";
 import { SettingsPage } from "./components/settings/SettingsPage";
+import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import type { ChatUIMessage } from "./lib/chat-utils";
-import { cn } from "./lib/utils";
 
 const SESSION_KEY = "openharness.sessionId";
 const THINKING_MODE_KEY = "openharness.thinkingMode";
@@ -55,6 +56,8 @@ interface SessionViewProps {
   initialMessages: ChatUIMessage[];
   onFinished: () => void;
   onThinkingModeChange: (mode: ThinkingMode) => void;
+  panelOpen: boolean;
+  onPanelOpenChange: (open: boolean) => void;
 }
 
 function SessionView({
@@ -74,10 +77,11 @@ function SessionView({
   initialMessages,
   onFinished,
   onThinkingModeChange,
+  panelOpen,
+  onPanelOpenChange,
 }: SessionViewProps) {
   const [tab, setTab] = useState<RightTab>("files");
   const [selectedToolId, setSelectedToolId] = useState<string>();
-  const [panelOpen, setPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
   const thinkingModeRef = useRef(thinkingMode);
   const agentIdRef = useRef(agentId);
@@ -220,8 +224,8 @@ function SessionView({
   }, []);
 
   const handleTogglePanel = useCallback(() => {
-    setPanelOpen((open) => !open);
-  }, []);
+    onPanelOpenChange(!panelOpen);
+  }, [onPanelOpenChange, panelOpen]);
 
   const handleResizeStart = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -320,6 +324,7 @@ export function App() {
     () => localStorage.getItem(AGENT_KEY) ?? undefined,
   );
   const [view, setView] = useState<"chat" | "settings">("chat");
+  const [panelOpen, setPanelOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -473,6 +478,16 @@ export function App() {
     setMessages([]);
   }
 
+  function handleSelectProject(nextProjectId?: string) {
+    setProjectId(nextProjectId);
+    const inScope = sessions.filter(
+      (session) => (session.projectId ?? undefined) === nextProjectId,
+    );
+    if (inScope.some((session) => session.id === sessionId)) return;
+    if (inScope.length > 0) selectSession(inScope[0].id);
+    else startNewSession();
+  }
+
   async function deleteSession(id: string) {
     await apiFetch(`/api/sessions/${id}`, { method: "DELETE" });
     if (id === sessionId) startNewSession();
@@ -480,49 +495,61 @@ export function App() {
   }
 
   return (
-    <main className="flex h-screen min-w-0 overflow-hidden">
-      <Sidebar
+    <SidebarProvider
+      className="h-screen min-w-0 overflow-hidden"
+      style={{ "--sidebar-width": "18rem" } as CSSProperties}
+    >
+      <AppSidebar
         sessions={sessions}
         sessionId={sessionId}
         loading={loadingSessions}
         error={error}
+        projects={projects}
+        activeProjectId={projectId}
+        onSelectProject={handleSelectProject}
         onSelect={selectSession}
         onNew={startNewSession}
         onDelete={(id) => void deleteSession(id)}
-        onRefresh={() => void refreshSessions()}
+        onProjectsChanged={refreshProjects}
         onOpenSettings={() => setView("settings")}
       />
-      {view === "settings" && (
-        <SettingsPage
-          onExit={() => setView("chat")}
-          onChanged={() => {
-            refreshProviders();
-            refreshProjects();
-            refreshAgents();
-          }}
-        />
-      )}
-      <div className={cn("flex min-w-0 flex-1", view === "settings" && "hidden")}>
-        <SessionView
-          key={sessionId}
-          sessionId={sessionId}
-          title={title}
-          providers={providers}
-          requestSelection={modelSelection}
-          displaySelection={displaySelection}
-          onSelectionChange={setModelSelection}
-          thinkingMode={thinkingMode}
-          onThinkingModeChange={setThinkingMode}
-          agentId={agentId}
-          onAgentChange={setAgentId}
-          projects={projects}
-          projectId={projectId}
-          onProjectChange={setProjectId}
-          onProjectCreated={refreshProjects}
-          initialMessages={initialMessages}
-          onFinished={() => void refreshSessions()}
-        />
-      </div>
-    </main>
+      <SidebarPeekZone />
+      <SidebarInset className="min-w-0">
+        {view === "settings" ? (
+          <SettingsPage
+            onExit={() => setView("chat")}
+            onChanged={() => {
+              refreshProviders();
+              refreshProjects();
+              refreshAgents();
+            }}
+          />
+        ) : (
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <SessionView
+              key={sessionId}
+              sessionId={sessionId}
+              title={title}
+              providers={providers}
+              requestSelection={modelSelection}
+              displaySelection={displaySelection}
+              onSelectionChange={setModelSelection}
+              thinkingMode={thinkingMode}
+              onThinkingModeChange={setThinkingMode}
+              agentId={agentId}
+              onAgentChange={setAgentId}
+              projects={projects}
+              projectId={projectId}
+              onProjectChange={setProjectId}
+              onProjectCreated={refreshProjects}
+              initialMessages={initialMessages}
+              onFinished={() => void refreshSessions()}
+              panelOpen={panelOpen}
+              onPanelOpenChange={setPanelOpen}
+            />
+          </div>
+        )}
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

@@ -3,6 +3,7 @@ import { ArrowLeft, Bot, Cloud, FolderOpen, ShieldCheck, Wrench } from "lucide-r
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import { cn } from "@/lib/utils";
 import { ProvidersSection } from "./ProvidersSection";
 import { AgentsSection } from "./AgentsSection";
@@ -35,7 +36,8 @@ export function SettingsPage({ onExit, onChanged }: SettingsPageProps) {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+      <header className="flex h-11 shrink-0 items-center gap-3 border-b px-4">
+        <SidebarPeekTrigger />
         <Button variant="ghost" size="icon-sm" onClick={onExit} title="返回">
           <ArrowLeft size={16} />
         </Button>

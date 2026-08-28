@@ -3,6 +3,7 @@ export const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8787";
 export interface SessionSummary {
   id: string;
   title: string;
+  projectId?: string | null;
   createdAt: string;
   updatedAt: string;
 }

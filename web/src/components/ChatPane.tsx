@@ -36,6 +36,7 @@ import {
 } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
+import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import type {
   ApprovalInfo,
   ModelSelection,
@@ -117,8 +118,11 @@ export function ChatPane({
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b px-4">
-        <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
+      <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <SidebarPeekTrigger />
+          <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
+        </div>
         <Button
           variant="ghost"
           size="icon-sm"

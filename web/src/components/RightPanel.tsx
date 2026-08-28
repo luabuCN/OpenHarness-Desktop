@@ -58,7 +58,7 @@ export function RightPanel({
         onValueChange={(value) => onTabChange(value as RightTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="group-data-[orientation=horizontal]/tabs:h-14 w-full shrink-0 justify-start gap-1 rounded-none border-b bg-transparent px-2">
+        <TabsList className="group-data-[orientation=horizontal]/tabs:h-11 w-full shrink-0 justify-start gap-1 rounded-none border-b bg-transparent px-2">
           <TabsTrigger value="files" className="h-8 gap-1.5 text-xs">
             <FolderOpenIcon className="size-3.5" />
             文件

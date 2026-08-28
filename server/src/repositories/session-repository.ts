@@ -19,11 +19,11 @@ function messageTitle(messages: ChatUIMessage[]): string | undefined {
 }
 
 export const sessionRepository = {
-  async ensure(id: string, title = "New chat") {
+  async ensure(id: string, title = "New chat", projectId?: string) {
     return prisma.conversation.upsert({
       where: { id },
       update: {},
-      create: { id, title },
+      create: { id, title, projectId: projectId ?? null },
     });
   },
 
@@ -34,7 +34,7 @@ export const sessionRepository = {
   async list() {
     return prisma.conversation.findMany({
       orderBy: { updatedAt: "desc" },
-      select: { id: true, title: true, createdAt: true, updatedAt: true },
+      select: { id: true, title: true, projectId: true, createdAt: true, updatedAt: true },
     });
   },
 

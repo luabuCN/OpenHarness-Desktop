@@ -6,6 +6,7 @@ import { sessionRepository } from "../repositories/session-repository.js";
 const createSessionSchema = z.object({
   id: z.string().min(1).optional(),
   title: z.string().trim().min(1).max(120).optional(),
+  projectId: z.string().uuid().optional(),
 });
 
 const saveMessagesSchema = z.object({
@@ -24,6 +25,7 @@ sessionRoutes.post("/", async (c) => {
   const session = await sessionRepository.ensure(
     body.id ?? crypto.randomUUID(),
     body.title ?? "New chat",
+    body.projectId,
   );
   return c.json({ session }, 201);
 });
