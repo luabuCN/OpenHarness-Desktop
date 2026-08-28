@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { config } from "../env.js";
 import { prisma } from "../db.js";
-import { agentCapabilities } from "../conversations/conversation-service.js";
+import { agentRuntime } from "../runtime/agent-runtime.js";
 import { resolveModelConfig } from "../providers/provider-service.js";
 
 export const healthRoutes = new Hono();
@@ -23,6 +23,6 @@ healthRoutes.get("/", async (c) => {
     modelSource,
     workspace: true,
     bash: config.enableBash,
-    capabilities: agentCapabilities,
+  capabilities: agentRuntime.describe(),
   });
 });

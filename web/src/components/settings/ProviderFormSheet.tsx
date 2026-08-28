@@ -6,6 +6,7 @@ import {
   fetchRemoteModels,
   updateProvider,
   type ProviderInfo,
+  type ProviderInput,
   type ProviderTypeInfo,
 } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -62,7 +63,7 @@ export function ProviderFormSheet({
     setType(initial?.type ?? "");
     setIsActive(initial?.isActive ?? true);
     setApiBase(initial?.apiBase ?? "");
-    setApiKey(initial?.apiKey ?? "");
+    setApiKey("");
     setError(undefined);
   }, [open, initial]);
 
@@ -95,14 +96,18 @@ export function ProviderFormSheet({
           models = [];
         }
       }
-      const payload = {
+      const payload: Omit<ProviderInput, "apiKey"> & {
+        apiKey?: ProviderInput["apiKey"];
+      } = {
         name: name.trim(),
         type,
         apiBase: apiBase.trim(),
-        apiKey: apiKey.trim() ? apiKey.trim() : null,
         isActive,
         models,
       };
+      // Omitting apiKey preserves the stored secret; only create/edit with
+      // a non-empty value changes it.
+      if (!initial || apiKey.trim()) payload.apiKey = apiKey.trim();
       if (initial) {
         await updateProvider(initial.id, payload);
       } else {
@@ -179,7 +184,7 @@ export function ProviderFormSheet({
                 type="password"
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder="sk-..."
+                placeholder={initial?.hasApiKey ? "已配置，留空保持不变" : "sk-..."}
               />
               <FieldDescription>密钥仅保存在本地配置中。</FieldDescription>
             </Field>

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { prisma } from "../db.js";
 import { PROVIDER_TYPES } from "../providers/provider-types.js";
 import {
   createProvider,
@@ -49,6 +50,13 @@ providerRoutes.post("/fetch-models", async (c) => {
     .object({ apiBase: z.string().trim().min(1), apiKey: z.string().optional().nullable() })
     .parse(await c.req.json());
   const models = await fetchRemoteModels(body.apiBase, body.apiKey);
+  return c.json({ models });
+});
+
+providerRoutes.post("/:id/fetch-models", async (c) => {
+  const provider = await prisma.provider.findUnique({ where: { id: c.req.param("id") } });
+  if (!provider) return c.json({ error: "Provider not found" }, 404);
+  const models = await fetchRemoteModels(provider.apiBase, provider.apiKey);
   return c.json({ models });
 });
 

@@ -119,6 +119,7 @@ export function ProvidersSection({ onChanged }: ProvidersSectionProps) {
                     {provider.name}
                     <small className="text-xs font-normal text-muted-foreground">
                       {provider.type} · {provider.apiBase}
+                      {provider.apiKeyMasked ? ` · ${provider.apiKeyMasked}` : ""}
                     </small>
                   </div>
                 </div>

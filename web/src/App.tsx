@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { apiFetch, API_URL, listProviders, type ModelSelection, type ProviderInfo, type SessionSummary } from "./api";
+import {
+  apiFetch,
+  API_URL,
+  listConversationRuns,
+  listProjects,
+  listProviders,
+  decideApproval,
+  type ModelSelection,
+  type ProjectInfo,
+  type ProviderInfo,
+  type RunInfo,
+  type SessionSummary,
+} from "./api";
 import type { ThinkingMode } from "./api";
 import { ChatPane } from "./components/ChatPane";
 import { defaultModelSelection } from "./components/ModelSelector";
@@ -13,6 +25,8 @@ import { cn } from "./lib/utils";
 
 const SESSION_KEY = "openharness.sessionId";
 const THINKING_MODE_KEY = "openharness.thinkingMode";
+const AGENT_KEY = "openharness.agentId";
+const PROJECT_KEY = "openharness.projectId";
 const PANEL_WIDTH_MIN = 280;
 const PANEL_WIDTH_DEFAULT = 400;
 
@@ -27,6 +41,12 @@ interface SessionViewProps {
   selection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
   thinkingMode: ThinkingMode;
+  agentId?: string;
+  onAgentChange: (agentId: string) => void;
+  projectId?: string;
+  onProjectChange: (projectId?: string) => void;
+  projects: ProjectInfo[];
+  onProjectCreated: () => void;
   initialMessages: ChatUIMessage[];
   onFinished: () => void;
   onThinkingModeChange: (mode: ThinkingMode) => void;
@@ -39,6 +59,12 @@ function SessionView({
   selection,
   onSelectionChange,
   thinkingMode,
+  agentId,
+  onAgentChange,
+  projectId,
+  onProjectChange,
+  projects,
+  onProjectCreated,
   initialMessages,
   onFinished,
   onThinkingModeChange,
@@ -48,10 +74,21 @@ function SessionView({
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
   const thinkingModeRef = useRef(thinkingMode);
+  const agentIdRef = useRef(agentId);
+  const projectIdRef = useRef(projectId);
+  const [runs, setRuns] = useState<RunInfo[]>([]);
 
   useEffect(() => {
     thinkingModeRef.current = thinkingMode;
   }, [thinkingMode]);
+
+  useEffect(() => {
+    agentIdRef.current = agentId;
+  }, [agentId]);
+
+  useEffect(() => {
+    projectIdRef.current = projectId;
+  }, [projectId]);
 
   const transport = useMemo(
     () =>
@@ -65,11 +102,19 @@ function SessionView({
               body?.thinkingMode === "deep" || body?.thinkingMode === "fast"
                 ? body.thinkingMode
                 : thinkingModeRef.current,
+            agentId:
+              typeof body?.agentId === "string" && body.agentId
+                ? body.agentId
+                : agentIdRef.current,
+            projectId:
+              typeof body?.projectId === "string" && body.projectId
+                ? body.projectId
+                : projectIdRef.current,
             ...(selection ? { model: selection } : {}),
           },
         }),
       }),
-    [sessionId, selection],
+    [sessionId, projectId, selection],
   );
 
   const chat: UseChatHelpers<ChatUIMessage> = useChat<ChatUIMessage>({
@@ -77,18 +122,7 @@ function SessionView({
     messages: initialMessages,
     transport,
     onFinish: async (event) => {
-      const chatTitle = event.messages
-        .filter((message) => message.role === "user")
-        .at(-1)
-        ?.parts.filter((part) => part.type === "text")
-        .map((part) => ("text" in part ? part.text : ""))
-        .join(" ")
-        .slice(0, 80);
-
-      await apiFetch(`/api/sessions/${sessionId}/messages`, {
-        method: "PUT",
-        body: JSON.stringify({ messages: event.messages, title: chatTitle || "New chat" }),
-      }).catch(console.error);
+      void event;
       onFinished();
     },
   });
@@ -97,6 +131,61 @@ function SessionView({
   useEffect(() => {
     setChatMessages(initialMessages);
   }, [initialMessages, setChatMessages]);
+
+  const busy = chat.status === "submitted" || chat.status === "streaming";
+
+  useEffect(() => {
+    if (!busy) {
+      setRuns([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadRuns = () => {
+      void listConversationRuns(sessionId)
+        .then((next) => {
+          if (!cancelled) setRuns(next);
+        })
+        .catch(() => undefined);
+    };
+
+    loadRuns();
+    const timer = window.setInterval(loadRuns, 1_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [busy, sessionId]);
+
+  const pendingApprovals = runs.flatMap((run) =>
+    run.approvals
+      .filter((approval) => approval.status === "pending")
+      .map((approval) => ({ run, approval })),
+  );
+
+  const handleApprovalDecision = useCallback(
+    async (runId: string, approvalId: string, action: "approve" | "reject") => {
+      await decideApproval(runId, approvalId, action);
+      setRuns((current) =>
+        current.map((run) =>
+          run.id !== runId
+            ? run
+            : {
+                ...run,
+                approvals: run.approvals.map((approval) => {
+                  if (approval.id !== approvalId) return approval;
+
+                  return {
+                    ...approval,
+                    status: action === "approve" ? "approved" : "rejected",
+                  };
+                }),
+              },
+        ),
+      );
+    },
+    [],
+  );
 
   const handleToolSelect = useCallback((id: string) => {
     setSelectedToolId(id);
@@ -149,10 +238,20 @@ function SessionView({
         onSelectionChange={onSelectionChange}
         thinkingMode={thinkingMode}
         onThinkingModeChange={onThinkingModeChange}
+        agentId={agentId}
+        onAgentChange={onAgentChange}
         selectedToolId={selectedToolId}
         onToolSelect={handleToolSelect}
         panelOpen={panelOpen}
         onTogglePanel={handleTogglePanel}
+        projects={projects}
+        projectId={projectId}
+        onProjectChange={onProjectChange}
+        onProjectCreated={onProjectCreated}
+        pendingApprovals={pendingApprovals}
+        onApprovalDecision={(runId, approvalId, action) =>
+          void handleApprovalDecision(runId, approvalId, action)
+        }
       />
       {panelOpen ? (
         <div
@@ -189,9 +288,16 @@ export function App() {
   const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(() =>
     localStorage.getItem(THINKING_MODE_KEY) === "deep" ? "deep" : "fast",
   );
+  const [agentId, setAgentId] = useState<string | undefined>(
+    () => localStorage.getItem(AGENT_KEY) ?? undefined,
+  );
   const [view, setView] = useState<"chat" | "settings">("chat");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
+  const [projectId, setProjectId] = useState<string | undefined>(
+    () => localStorage.getItem(PROJECT_KEY) ?? undefined,
+  );
 
   const refreshProviders = useCallback(() => {
     void listProviders()
@@ -233,6 +339,16 @@ export function App() {
     refreshProviders();
   }, [refreshProviders]);
 
+  const refreshProjects = useCallback(() => {
+    void listProjects()
+      .then(setProjects)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refreshProjects();
+  }, [refreshProjects]);
+
   useEffect(() => {
     localStorage.setItem(SESSION_KEY, sessionId);
   }, [sessionId]);
@@ -240,6 +356,19 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(THINKING_MODE_KEY, thinkingMode);
   }, [thinkingMode]);
+
+  useEffect(() => {
+    if (agentId) {
+      localStorage.setItem(AGENT_KEY, agentId);
+    } else {
+      localStorage.removeItem(AGENT_KEY);
+    }
+  }, [agentId]);
+
+  useEffect(() => {
+    if (projectId) localStorage.setItem(PROJECT_KEY, projectId);
+    else localStorage.removeItem(PROJECT_KEY);
+  }, [projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -305,6 +434,12 @@ export function App() {
           onSelectionChange={setModelSelection}
           thinkingMode={thinkingMode}
           onThinkingModeChange={setThinkingMode}
+          agentId={agentId}
+          onAgentChange={setAgentId}
+          projects={projects}
+          projectId={projectId}
+          onProjectChange={setProjectId}
+          onProjectCreated={refreshProjects}
           initialMessages={initialMessages}
           onFinished={() => void refreshSessions()}
         />

@@ -45,6 +45,10 @@ export class SafeFsProvider {
     this.maxFileSize = options?.maxFileSize ?? DEFAULT_MAX_FILE_SIZE;
   }
 
+  get cwd(): string {
+    return this.root;
+  }
+
   private assertInsideWorkspace(target: string): string {
     const resolved = path.resolve(this.root, target);
     const relative = path.relative(this.root, resolved);
@@ -133,11 +137,34 @@ export class SafeShellProvider {
     this.maxStderr = options?.maxStderr ?? 10_000;
   }
 
+  private invocation(command: string) {
+    if (process.platform === "win32") {
+      return {
+        executable: "powershell.exe",
+        args: [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          [
+            "$ErrorActionPreference = 'Stop'",
+            command,
+            "if (Get-Variable LASTEXITCODE -ErrorAction Ignore) { exit $LASTEXITCODE }",
+          ].join("\n"),
+        ],
+      };
+    }
+
+    return { executable: "bash", args: ["-c", command] };
+  }
+
   exec(command: string, options?: { timeout?: number; cwd?: string }): Promise<ShellResult> {
     return new Promise((resolve) => {
+      const shell = this.invocation(command);
       const child = execFile(
-        "bash",
-        ["-c", command],
+        shell.executable,
+        shell.args,
         {
           timeout: options?.timeout ?? 30_000,
           maxBuffer: 1024 * 1024,

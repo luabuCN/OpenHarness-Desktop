@@ -68,11 +68,50 @@ export interface ProviderInfo {
   name: string;
   type: string;
   apiBase: string;
-  apiKey: string | null;
+  hasApiKey: boolean;
+  apiKeyMasked: string | null;
   isActive: boolean;
   models: ProviderModel[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  rootPath: string;
+  description?: string | null;
+  defaultAgentId?: string | null;
+  defaultModelId?: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApprovalInfo {
+  id: string;
+  runId: string;
+  toolName: string;
+  input: string;
+  reason?: string | null;
+  status: "pending" | "approved" | "rejected" | "timeout" | "cancelled";
+  createdAt: string;
+}
+
+export interface RunInfo {
+  id: string;
+  conversationId: string;
+  projectId?: string | null;
+  agentId?: string | null;
+  thinkingMode: string;
+  providerId?: string | null;
+  modelId?: string | null;
+  status: "queued" | "running" | "waiting_approval" | "completed" | "failed" | "aborted";
+  error?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  approvals: ApprovalInfo[];
 }
 
 export interface ProviderTypeInfo {
@@ -95,6 +134,16 @@ export interface ModelSelection {
   modelId: string;
 }
 
+export interface AgentInfo {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export function listAgents(): Promise<AgentInfo[]> {
+  return apiFetch<{ agents: AgentInfo[] }>("/api/agents").then((data) => data.agents);
+}
+
 export function listProviders(): Promise<ProviderInfo[]> {
   return apiFetch<{ providers: ProviderInfo[] }>("/api/providers").then((data) => data.providers);
 }
@@ -108,6 +157,39 @@ export function fetchRemoteModels(apiBase: string, apiKey?: string | null): Prom
     method: "POST",
     body: JSON.stringify({ apiBase, apiKey }),
   }).then((data) => data.models);
+}
+
+export function fetchSavedProviderModels(providerId: string): Promise<ProviderModel[]> {
+  return apiFetch<{ models: ProviderModel[] }>(`/api/providers/${providerId}/fetch-models`, {
+    method: "POST",
+  }).then((data) => data.models);
+}
+
+export function listProjects(): Promise<ProjectInfo[]> {
+  return apiFetch<{ projects: ProjectInfo[] }>("/api/projects").then((data) => data.projects);
+}
+
+export function createProject(input: Pick<ProjectInfo, "name" | "rootPath"> & Partial<ProjectInfo>): Promise<ProjectInfo> {
+  return apiFetch<{ project: ProjectInfo }>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.project);
+}
+
+export function listConversationRuns(conversationId: string): Promise<RunInfo[]> {
+  return apiFetch<{ runs: RunInfo[] }>(`/api/runs/conversations/${conversationId}`)
+    .then((data) => data.runs);
+}
+
+export function decideApproval(
+  runId: string,
+  approvalId: string,
+  action: "approve" | "reject",
+): Promise<void> {
+  return apiFetch(`/api/runs/${runId}/approvals/${approvalId}`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  }).then(() => undefined);
 }
 
 export function createProvider(input: ProviderInput): Promise<ProviderInfo> {

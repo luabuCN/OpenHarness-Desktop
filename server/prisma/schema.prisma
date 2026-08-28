@@ -10,9 +10,12 @@ datasource db {
 model Conversation {
   id        String          @id
   title     String          @default("New chat")
+  projectId String?
+  project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
   messages  StoredMessage[]
+  runs      ThreadRun[]
 }
 
 model StoredMessage {
@@ -39,4 +42,70 @@ model Provider {
   models    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Project {
+  id              String         @id @default(uuid())
+  name            String         @unique
+  rootPath        String
+  description     String?
+  defaultAgentId  String?
+  defaultModelId  String?
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  conversations   Conversation[]
+  runs            ThreadRun[]
+}
+
+model ThreadRun {
+  id             String        @id @default(uuid())
+  conversationId String
+  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  agentId        String?
+  thinkingMode   String        @default("fast")
+  providerId     String?
+  modelId        String?
+  status         String        @default("queued")
+  error          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  startedAt      DateTime?
+  completedAt    DateTime?
+  events         RunEvent[]
+  approvals      ToolApproval[]
+
+  @@index([conversationId, status, createdAt])
+  @@index([projectId, createdAt])
+}
+
+model RunEvent {
+  id        String    @id @default(uuid())
+  runId     String
+  run       ThreadRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sequence  Int
+  eventType String
+  payload   String
+  createdAt DateTime  @default(now())
+
+  @@unique([runId, sequence])
+  @@index([runId, sequence])
+}
+
+model ToolApproval {
+  id         String    @id @default(uuid())
+  runId      String
+  run        ThreadRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  toolName   String
+  input      String
+  reason     String?
+  status     String    @default("pending")
+  decisionBy String?
+  decidedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([runId, status])
 }

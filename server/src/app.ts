@@ -2,9 +2,12 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { ZodError } from "zod";
 import { chatRoutes } from "./routes/chat.js";
+import { agentRoutes } from "./routes/agents.js";
 import { fileRoutes } from "./routes/files.js";
 import { healthRoutes } from "./routes/health.js";
 import { providerRoutes } from "./routes/providers.js";
+import { projectRoutes } from "./routes/projects.js";
+import { runRoutes } from "./routes/runs.js";
 import { sessionRoutes } from "./routes/sessions.js";
 
 const allowedOrigins = new Set(
@@ -40,4 +43,7 @@ app.route("/health", healthRoutes);
 app.route("/api/files", fileRoutes);
 app.route("/api/sessions", sessionRoutes);
 app.route("/api/providers", providerRoutes);
+app.route("/api/projects", projectRoutes);
+app.route("/api/runs", runRoutes);
+app.route("/api/agents", agentRoutes);
 app.route("/api/chat", chatRoutes);

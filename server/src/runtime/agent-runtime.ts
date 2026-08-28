@@ -1,106 +1,207 @@
 import { toAISdkStream } from "@mastra/ai-sdk";
 import { Agent } from "@mastra/core/agent";
 import { TokenLimiterProcessor } from "@mastra/core/processors";
-import { convertToModelMessages, createUIMessageStreamResponse } from "ai";
+import {
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+} from "ai";
 import { config, skillsDir } from "../env.js";
-import { getProviderRevision, type ModelSelection } from "../providers/provider-service.js";
+import { prisma } from "../db.js";
+import type { ModelSelection } from "../providers/provider-service.js";
 import type { ChatUIMessage } from "../chat-types.js";
+import { resolveAgentDefinition } from "./agents.js";
 import { createModel } from "./model.js";
+import { runService } from "./run-service.js";
 import { createToolRegistry } from "./tools.js";
 import { THINKING_MODES, type ThinkingMode } from "./types.js";
 
-const systemPrompt =
-  "You are a local coding assistant working inside the user's workspace. " +
-  "Be concise and direct. Use announce before multi-step work or when you find " +
-  "something notable. Do not claim to have changed files unless a tool call succeeded.";
-
-export interface AgentRuntime {
-  readonly maxSteps: number;
-  readonly agent: Agent;
+export interface ConversationRunContext {
+  conversationId: string;
+  projectId?: string;
 }
 
-interface CachedRuntime extends AgentRuntime {
-  revision: number;
+type ChatModel = Awaited<ReturnType<typeof createModel>>;
+
+function truncateError(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 2_000);
 }
 
-export class AgentRuntimeService {
-  private readonly runtimes = new Map<string, CachedRuntime>();
+async function projectRoot(projectId?: string): Promise<string | undefined> {
+  if (!projectId) return undefined;
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { isActive: true, rootPath: true },
+  });
+  if (!project?.isActive) throw new Error("项目不存在或已被停用");
+  return project.rootPath;
+}
 
-  async get(mode: ThinkingMode, selection?: ModelSelection): Promise<AgentRuntime> {
-    const revision = getProviderRevision();
-    const cacheKey = `${mode}|${selection ? `${selection.providerId}:${selection.modelId}` : "default"}`;
-    const cached = this.runtimes.get(cacheKey);
-    if (cached && cached.revision === revision) return cached;
-
-    const model = await createModel(mode, selection);
-    const registry = createToolRegistry();
-    const tools = registry.toToolSet();
-    const maxSteps = mode === "deep" ? 120 : 80;
-
-    const explore = new Agent({
-      id: "explore",
-      name: "explore",
-      description: "Read-only workspace exploration.",
-      instructions:
-        "You explore the local workspace, read files, and report concise findings. " +
-        "You cannot modify files.",
-      model,
-      tools,
-      defaultOptions: { maxSteps: 15 },
+class AgentRuntimeService {
+  async stream(
+    mode: ThinkingMode,
+    messages: ChatUIMessage[],
+    requestSignal: AbortSignal,
+    context: ConversationRunContext,
+    selection?: ModelSelection,
+    requestedAgentId?: string,
+) {
+    let effectiveAgentId = requestedAgentId;
+    if (!effectiveAgentId && context.projectId) {
+      const project = await prisma.project.findUnique({
+        where: { id: context.projectId },
+        select: { defaultAgentId: true },
+      });
+      effectiveAgentId = project?.defaultAgentId ?? undefined;
+    }
+    const definition = resolveAgentDefinition(effectiveAgentId);
+    const rootPath = await projectRoot(context.projectId);
+    const run = await runService.start({
+      conversationId: context.conversationId,
+      messages,
+      projectId: context.projectId,
+      thinkingMode: mode,
+      selection,
+      agentId: definition.id,
     });
+    const activeRun = runService.registerAbortSource(run.id, requestSignal);
 
-    const agent = new Agent({
-      id: "assistant",
-      name: "assistant",
-      description: "Local workspace coding assistant.",
-      instructions:
-        mode === "deep"
-          ? `${systemPrompt} Think carefully before acting; reason through edge cases and verify assumptions when useful.`
-          : systemPrompt,
-      model,
-      tools,
-      agents: { explore },
-      skills: [skillsDir],
-      maxRetries: 3,
-      inputProcessors: [new TokenLimiterProcessor({ limit: config.contextWindow })],
-      defaultOptions: { maxSteps },
-    });
+    try {
+      const model = await createModel(mode, selection);
+      const tools = createToolRegistry({
+        rootPath,
+        readOnly: definition.toolset === "readonly",
+        bashApprovals: definition.toolset === "all" ? activeRun.approvals : undefined,
+      }).toToolSet();
+      const maxSteps = mode === "deep" ? 120 : 80;
 
-    const runtime: CachedRuntime = { agent, maxSteps, revision };
-    this.runtimes.set(cacheKey, runtime);
-    return runtime;
-  }
+      const explore = definition.withExploreSubagent
+        ? new Agent({
+            id: "explore",
+            name: "explore",
+            description: "Read-only workspace exploration.",
+            instructions:
+              "You explore the local workspace, read files, and report concise findings. You cannot modify files.",
+            model,
+            tools: createToolRegistry({ rootPath, readOnly: true }).toToolSet(),
+            defaultOptions: { maxSteps: 15 },
+          })
+        : undefined;
 
-  async stream(mode: ThinkingMode, messages: ChatUIMessage[], signal?: AbortSignal, selection?: ModelSelection) {
-    const { agent, maxSteps } = await this.get(mode, selection);
-    const modelMessages = await convertToModelMessages(messages, {
-      ignoreIncompleteToolCalls: true,
-    });
-    const stream = await agent.stream(modelMessages, {
-      abortSignal: signal,
-      maxSteps,
-    });
-    const uiStream = toAISdkStream(stream, {
-      from: "agent",
-      version: "v6",
-      sendReasoning: true,
-      sendStart: true,
-      sendFinish: true,
-    });
+      const agent = new Agent({
+        id: definition.id,
+        name: definition.name,
+        description: definition.description,
+        instructions:
+          mode === "deep"
+            ? `${definition.instructions} Think carefully before acting; reason through edge cases and verify assumptions when useful.`
+            : definition.instructions,
+        model,
+        tools,
+        ...(explore ? { agents: { explore } } : {}),
+        skills: [skillsDir],
+        maxRetries: 3,
+        inputProcessors: [new TokenLimiterProcessor({ limit: config.contextWindow })],
+        defaultOptions: { maxSteps },
+      });
 
-    return createUIMessageStreamResponse({
-      stream: uiStream,
-      headers: {
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      },
-    });
+      const modelMessages = await convertToModelMessages(messages, {
+        ignoreIncompleteToolCalls: true,
+      });
+      const mastraStream = await agent.stream(modelMessages, {
+        abortSignal: activeRun.signal,
+        maxSteps,
+      });
+      const sourceChunks = toAISdkStream(mastraStream, {
+        from: "agent",
+        version: "v6",
+        sendReasoning: true,
+        sendStart: true,
+        sendFinish: true,
+      });
+
+      let released = false;
+      let releaseOwnership!: () => void;
+      const ownershipComplete = new Promise<void>((resolve) => {
+        releaseOwnership = () => {
+          if (released) return;
+          released = true;
+          resolve();
+        };
+      });
+
+      const persistedTitle = messages
+        .filter((message) => message.role === "user")
+        .at(-1)?.parts
+        .filter((part): part is { type: "text"; text: string } => part.type === "text")
+        .map((part) => part.text)
+        .join(" ")
+        .trim()
+        .slice(0, 80);
+
+      const uiStream = createUIMessageStream<ChatUIMessage>({
+        originalMessages: messages,
+        execute: async ({ writer }) => {
+          const reader = sourceChunks.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            writer.write(value);
+            await runService
+              .appendTransition(run.id, value.type, value)
+              .catch(console.error);
+          }
+        },
+        onStepFinish: ({ messages: stepMessages }) =>
+          runService.saveStep(
+            context.conversationId,
+            stepMessages as ChatUIMessage[],
+            persistedTitle,
+          ),
+        onFinish: ({ messages: finalMessages, isAborted }) =>
+          Promise.all([
+            runService.saveStep(
+              context.conversationId,
+              finalMessages as ChatUIMessage[],
+              persistedTitle,
+            ),
+            runService.finish(run.id, isAborted ? "aborted" : "completed"),
+          ]).then(() => releaseOwnership()),
+        onError: (error) => {
+          console.error(error);
+          return "The local agent run failed.";
+        },
+      });
+
+      // Some transport failures end before an AI SDK finish callback; release
+      // the run's controller ownership when ownership work has stopped.
+      void ownershipComplete.finally(() => activeRun.cleanup());
+      activeRun.signal.addEventListener("abort", () => {
+        setTimeout(releaseOwnership, 1_000);
+      }, { once: true });
+
+      return createUIMessageStreamResponse({
+        stream: uiStream,
+        headers: {
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        },
+      });
+    } catch (error) {
+      activeRun.cleanup();
+      await runService.finish(run.id, "failed", truncateError(error));
+      throw error;
+    }
   }
 
   describe() {
-    const registry = createToolRegistry();
-    const tools = registry.list().map(({ name }) => name);
-    return THINKING_MODES.map((mode) => ({ mode, tools }));
+    const registry = createToolRegistry({ readOnly: true });
+    return THINKING_MODES.map((mode) => ({
+      mode,
+      tools: registry.list().map(({ name }) => name),
+    }));
   }
 }
+
+export const agentRuntime = new AgentRuntimeService();

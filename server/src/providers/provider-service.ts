@@ -17,7 +17,8 @@ export interface ProviderView {
   name: string;
   type: string;
   apiBase: string;
-  apiKey: string | null;
+  hasApiKey: boolean;
+  apiKeyMasked: string | null;
   isActive: boolean;
   models: ProviderModel[];
   createdAt: string;
@@ -108,12 +109,18 @@ function toView(provider: {
   createdAt: Date;
   updatedAt: Date;
 }): ProviderView {
+  const apiKeyMasked = provider.apiKey
+    ? provider.apiKey.length <= 8
+      ? "*".repeat(provider.apiKey.length)
+      : `${provider.apiKey.slice(0, 4)}${"*".repeat(Math.min(12, provider.apiKey.length - 8))}${provider.apiKey.slice(-4)}`
+    : null;
   return {
     id: provider.id,
     name: provider.name,
     type: provider.type,
     apiBase: provider.apiBase,
-    apiKey: provider.apiKey,
+    hasApiKey: Boolean(provider.apiKey),
+    apiKeyMasked,
     isActive: provider.isActive,
     models: parseModels(provider.models),
     createdAt: provider.createdAt.toISOString(),

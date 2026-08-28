@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 
 import {
-  fetchRemoteModels,
+  fetchSavedProviderModels,
   updateProvider,
   type ProviderInfo,
   type ProviderModel,
@@ -245,7 +245,7 @@ export function ModelsSheet({ open, onOpenChange, provider, onSaved }: ModelsShe
     setRefreshing(true);
     setError(undefined);
     try {
-      const fetched = await fetchRemoteModels(provider.apiBase, provider.apiKey);
+      const fetched = await fetchSavedProviderModels(provider.id);
       const existingById = new Map(models.map((entry) => [entry.id, entry]));
       const fetchedIds = new Set(fetched.map((entry) => entry.id));
       const manual = models.filter((entry) => !fetchedIds.has(entry.id));
