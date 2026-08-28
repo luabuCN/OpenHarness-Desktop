@@ -50,16 +50,16 @@ import { AgentSelector } from "./AgentSelector";
 import { ProjectSelector } from "./ProjectSelector";
 
 const SUGGESTIONS = [
-  "List the files in my workspace",
-  "What OS and shell am I running?",
-  "Summarize what this workspace contains",
+  "列出工作区中的文件",
+  "我正在使用什么操作系统和 Shell？",
+  "总结一下这个工作区的内容",
 ];
 
 export interface ChatPaneProps {
   chat: UseChatHelpers<ChatUIMessage>;
   title: string;
   providers: ProviderInfo[];
-  selection: ModelSelection | null;
+  displaySelection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
   thinkingMode: ThinkingMode;
   onThinkingModeChange: (mode: ThinkingMode) => void;
@@ -85,7 +85,7 @@ export function ChatPane({
   chat,
   title,
   providers,
-  selection,
+  displaySelection,
   onSelectionChange,
   thinkingMode,
   onThinkingModeChange,
@@ -123,8 +123,8 @@ export function ChatPane({
           variant="ghost"
           size="icon-sm"
           onClick={onTogglePanel}
-          title={panelOpen ? "Collapse panel" : "Expand panel"}
-          aria-label={panelOpen ? "Collapse panel" : "Expand panel"}
+          title={panelOpen ? "折叠面板" : "展开面板"}
+          aria-label={panelOpen ? "折叠面板" : "展开面板"}
         >
           {panelOpen ? (
             <PanelRightCloseIcon className="size-4" />
@@ -139,9 +139,9 @@ export function ChatPane({
           <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm shadow-sm">
             <div className="flex min-w-0 items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
               <ShieldAlertIcon className="size-4 shrink-0" />
-              <span>命令等待审批</span>
+              <span>操作等待审批</span>
               <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                {pendingApprovals.length} pending
+                待处理 {pendingApprovals.length} 项
               </span>
             </div>
             {pendingApprovals.map(({ run, approval }) => (
@@ -182,8 +182,8 @@ export function ChatPane({
         <ConversationContent className="mx-auto w-full max-w-3xl gap-6 py-6">
           {chat.messages.length === 0 ? (
             <ConversationEmptyState
-              title="Local workspace ready"
-              description="Ask about files, paste an image, or start a new task."
+              title="本地工作区已就绪"
+              description="可以询问文件相关内容、粘贴图片，或直接开始新任务。"
             />
           ) : (
             chat.messages.map((message) => (
@@ -242,7 +242,7 @@ export function ChatPane({
             <PromptInputFooter>
               <PromptInputTools>
                 <PromptInputActionMenu>
-                  <PromptInputActionMenuTrigger tooltip="Add attachments" />
+                  <PromptInputActionMenuTrigger tooltip="添加附件" />
                   <PromptInputActionMenuContent>
                     <PromptInputActionAddAttachments />
                   </PromptInputActionMenuContent>
@@ -255,8 +255,8 @@ export function ChatPane({
                   }
                   tooltip={
                     thinkingMode === "deep"
-                      ? "Deep thinking is on, click to turn off"
-                      : "Think carefully before answering"
+                      ? "深度思考已开启，点击关闭"
+                      : "回答前先进行深度思考"
                   }
                   variant={thinkingMode === "deep" ? "secondary" : "ghost"}
                 >
@@ -265,7 +265,7 @@ export function ChatPane({
                 </PromptInputButton>
                 <ModelSelector
                   providers={providers}
-                  value={selection}
+                  value={displaySelection}
                   onChange={onSelectionChange}
                 />
               </PromptInputTools>
@@ -309,9 +309,9 @@ function AssistantLoadingView({ mode }: { mode: ThinkingMode }) {
     <div className="flex w-full items-center gap-3 text-sm text-muted-foreground">
       <LoaderCircleIcon className="size-4 animate-spin" />
       <div className="min-w-0 flex-1 space-y-1">
-        <Shimmer duration={1.6}>Thinking...</Shimmer>
+        <Shimmer duration={1.6}>思考中...</Shimmer>
         <Shimmer className="block h-3 max-w-64 opacity-50" duration={2}>
-          {"Preparing the answer"}
+          {"正在准备回答"}
         </Shimmer>
       </div>
     </div>

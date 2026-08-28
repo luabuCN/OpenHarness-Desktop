@@ -45,7 +45,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    throw new Error(message || `请求失败：${response.status}`);
   }
 
   return response.json() as Promise<T>;
@@ -82,6 +82,7 @@ export interface ProjectInfo {
   rootPath: string;
   description?: string | null;
   defaultAgentId?: string | null;
+  defaultProviderId?: string | null;
   defaultModelId?: string | null;
   isActive: boolean;
   createdAt: string;
@@ -114,6 +115,23 @@ export interface RunInfo {
   approvals: ApprovalInfo[];
 }
 
+export interface AgentTaskInfo {
+  id: string;
+  conversationId: string;
+  runId?: string | null;
+  taskId: string;
+  subject: string;
+  description?: string | null;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string | null;
+  owner?: string | null;
+  metadata: Record<string, unknown>;
+  blockedBy: string[];
+  blocks: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ProviderTypeInfo {
   id: string;
   name: string;
@@ -134,14 +152,80 @@ export interface ModelSelection {
   modelId: string;
 }
 
+export interface ToolPolicy {
+  enabled: boolean;
+  requireApproval: boolean;
+}
+
+export type ToolPermissionMap = Record<string, ToolPolicy>;
+
+export interface ToolCatalogInfo {
+  name: string;
+  label: string;
+  description: string;
+  risk: "low" | "medium" | "high";
+  mutating: boolean;
+  defaultPolicy: ToolPolicy;
+}
+
+export interface SubAgentInfo {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  toolPermissions: ToolPermissionMap;
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
   description: string;
+  instructions: string;
+  toolPermissions: ToolPermissionMap;
+  subAgents: SubAgentInfo[];
+  defaultProviderId?: string | null;
+  defaultModelId?: string | null;
+  isActive: boolean;
+  isBuiltIn: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentInput {
+  name?: string;
+  description?: string;
+  instructions?: string;
+  toolPermissions?: ToolPermissionMap;
+  subAgents?: SubAgentInfo[];
+  defaultProviderId?: string | null;
+  defaultModelId?: string | null;
+  isActive?: boolean;
 }
 
 export function listAgents(): Promise<AgentInfo[]> {
   return apiFetch<{ agents: AgentInfo[] }>("/api/agents").then((data) => data.agents);
+}
+
+export function listTools(): Promise<ToolCatalogInfo[]> {
+  return apiFetch<{ tools: ToolCatalogInfo[] }>("/api/agents/tools").then((data) => data.tools);
+}
+
+export function createAgent(input: AgentInput): Promise<AgentInfo> {
+  return apiFetch<{ agent: AgentInfo }>("/api/agents", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.agent);
+}
+
+export function updateAgent(id: string, input: AgentInput): Promise<AgentInfo> {
+  return apiFetch<{ agent: AgentInfo }>(`/api/agents/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }).then((data) => data.agent);
+}
+
+export function deleteAgent(id: string): Promise<void> {
+  return apiFetch(`/api/agents/${id}`, { method: "DELETE" }).then(() => undefined);
 }
 
 export function listProviders(): Promise<ProviderInfo[]> {
@@ -176,9 +260,28 @@ export function createProject(input: Pick<ProjectInfo, "name" | "rootPath"> & Pa
   }).then((data) => data.project);
 }
 
+export function updateProject(
+  id: string,
+  input: Partial<Pick<ProjectInfo, "name" | "rootPath"> & ProjectInfo>,
+): Promise<ProjectInfo> {
+  return apiFetch<{ project: ProjectInfo }>(`/api/projects/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }).then((data) => data.project);
+}
+
+export function deleteProject(id: string): Promise<void> {
+  return apiFetch(`/api/projects/${id}`, { method: "DELETE" }).then(() => undefined);
+}
+
 export function listConversationRuns(conversationId: string): Promise<RunInfo[]> {
   return apiFetch<{ runs: RunInfo[] }>(`/api/runs/conversations/${conversationId}`)
     .then((data) => data.runs);
+}
+
+export function listConversationTasks(conversationId: string): Promise<AgentTaskInfo[]> {
+  return apiFetch<{ tasks: AgentTaskInfo[] }>(`/api/conversations/${conversationId}/tasks`)
+    .then((data) => data.tasks);
 }
 
 export function decideApproval(

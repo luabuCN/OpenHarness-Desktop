@@ -8,12 +8,15 @@ import {
 } from "ai";
 import { config, skillsDir } from "../env.js";
 import { prisma } from "../db.js";
-import type { ModelSelection } from "../providers/provider-service.js";
+import {
+  resolveConfiguredSelection,
+  type ModelSelection,
+} from "../providers/provider-service.js";
 import type { ChatUIMessage } from "../chat-types.js";
-import { resolveAgentDefinition } from "./agents.js";
+import { agentConfigService, type SubAgentConfig } from "./agents.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
-import { createToolRegistry } from "./tools.js";
+import { createToolRegistry, type ApprovalBridge } from "./tools.js";
 import { THINKING_MODES, type ThinkingMode } from "./types.js";
 
 export interface ConversationRunContext {
@@ -27,14 +30,20 @@ function truncateError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 2_000);
 }
 
-async function projectRoot(projectId?: string): Promise<string | undefined> {
+async function projectDefaults(projectId?: string) {
   if (!projectId) return undefined;
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    select: { isActive: true, rootPath: true },
+    select: {
+      isActive: true,
+      rootPath: true,
+      defaultAgentId: true,
+      defaultProviderId: true,
+      defaultModelId: true,
+    },
   });
   if (!project?.isActive) throw new Error("项目不存在或已被停用");
-  return project.rootPath;
+  return project;
 }
 
 class AgentRuntimeService {
@@ -46,47 +55,51 @@ class AgentRuntimeService {
     selection?: ModelSelection,
     requestedAgentId?: string,
 ) {
-    let effectiveAgentId = requestedAgentId;
-    if (!effectiveAgentId && context.projectId) {
-      const project = await prisma.project.findUnique({
-        where: { id: context.projectId },
-        select: { defaultAgentId: true },
-      });
-      effectiveAgentId = project?.defaultAgentId ?? undefined;
-    }
-    const definition = resolveAgentDefinition(effectiveAgentId);
-    const rootPath = await projectRoot(context.projectId);
+    const project = await projectDefaults(context.projectId);
+    const definition = await agentConfigService.resolve(
+      requestedAgentId ?? project?.defaultAgentId ?? undefined,
+    );
+    const rootPath = project?.rootPath;
+    const effectiveSelection =
+      selection ??
+      await resolveConfiguredSelection(
+        project
+          ? {
+              providerId: project.defaultProviderId,
+              modelId: project.defaultModelId,
+            }
+          : undefined,
+        {
+          providerId: definition.defaultProviderId,
+          modelId: definition.defaultModelId,
+        },
+      );
+    const model = await createModel(mode, effectiveSelection);
     const run = await runService.start({
       conversationId: context.conversationId,
       messages,
       projectId: context.projectId,
       thinkingMode: mode,
-      selection,
+      selection: effectiveSelection,
       agentId: definition.id,
     });
     const activeRun = runService.registerAbortSource(run.id, requestSignal);
 
     try {
-      const model = await createModel(mode, selection);
       const tools = createToolRegistry({
         rootPath,
-        readOnly: definition.toolset === "readonly",
-        bashApprovals: definition.toolset === "all" ? activeRun.approvals : undefined,
+        toolPermissions: definition.toolPermissions,
+        approvals: activeRun.approvals,
+        taskContext: {
+          conversationId: context.conversationId,
+          runId: run.id,
+        },
       }).toToolSet();
       const maxSteps = mode === "deep" ? 120 : 80;
 
-      const explore = definition.withExploreSubagent
-        ? new Agent({
-            id: "explore",
-            name: "explore",
-            description: "Read-only workspace exploration.",
-            instructions:
-              "You explore the local workspace, read files, and report concise findings. You cannot modify files.",
-            model,
-            tools: createToolRegistry({ rootPath, readOnly: true }).toToolSet(),
-            defaultOptions: { maxSteps: 15 },
-          })
-        : undefined;
+      const subAgents = definition.subAgents.map((entry) =>
+        createSubAgent(entry, model, rootPath, activeRun.approvals),
+      );
 
       const agent = new Agent({
         id: definition.id,
@@ -98,7 +111,9 @@ class AgentRuntimeService {
             : definition.instructions,
         model,
         tools,
-        ...(explore ? { agents: { explore } } : {}),
+        ...(subAgents.length > 0
+          ? { agents: Object.fromEntries(subAgents.map((agent) => [agent.id, agent])) }
+          : {}),
         skills: [skillsDir],
         maxRetries: 3,
         inputProcessors: [new TokenLimiterProcessor({ limit: config.contextWindow })],
@@ -196,12 +211,36 @@ class AgentRuntimeService {
   }
 
   describe() {
-    const registry = createToolRegistry({ readOnly: true });
+    const registry = createToolRegistry({
+      readOnly: true,
+      taskContext: { conversationId: "current" },
+    });
     return THINKING_MODES.map((mode) => ({
       mode,
       tools: registry.list().map(({ name }) => name),
     }));
   }
+}
+
+function createSubAgent(
+  config: SubAgentConfig,
+  model: ChatModel,
+  rootPath?: string,
+  approvals?: ApprovalBridge,
+) {
+  return new Agent({
+    id: config.id,
+    name: config.name,
+    description: config.description,
+    instructions: config.instructions,
+    model,
+    tools: createToolRegistry({
+      rootPath,
+      toolPermissions: config.toolPermissions,
+      approvals,
+    }).toToolSet(),
+    defaultOptions: { maxSteps: 15 },
+  });
 }
 
 export const agentRuntime = new AgentRuntimeService();

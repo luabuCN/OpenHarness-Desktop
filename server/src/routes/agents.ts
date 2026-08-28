@@ -1,10 +1,69 @@
 import { Hono } from "hono";
-import { agentDefinitions } from "../runtime/agents.js";
+import { z } from "zod";
+import { agentConfigService, type AgentConfigInput } from "../runtime/agents.js";
+import { TOOL_CATALOG } from "../runtime/tool-catalog.js";
 
 export const agentRoutes = new Hono();
 
-agentRoutes.get("/", (c) => {
-  return c.json({
-    agents: agentDefinitions.map(({ id, name, description }) => ({ id, name, description })),
-  });
+const toolPolicySchema = z.object({
+  enabled: z.boolean().optional(),
+  requireApproval: z.boolean().optional(),
+});
+
+const subAgentSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().min(1).max(500),
+  instructions: z.string().trim().min(1).max(20_000),
+  toolPermissions: z.record(z.string(), toolPolicySchema).optional(),
+});
+
+const createAgentSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().min(1).max(500),
+  instructions: z.string().trim().min(1).max(50_000),
+  toolPermissions: z.record(z.string(), toolPolicySchema).optional(),
+  subAgents: z.array(subAgentSchema).max(10).optional(),
+  defaultProviderId: z.string().trim().min(1).nullable().optional(),
+  defaultModelId: z.string().trim().min(1).nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+const updateAgentSchema = createAgentSchema.partial();
+
+agentRoutes.get("/tools", (c) => c.json({ tools: TOOL_CATALOG }));
+
+agentRoutes.get("/", async (c) => {
+  return c.json({ agents: await agentConfigService.list() });
+});
+
+agentRoutes.post("/", async (c) => {
+  const input = createAgentSchema.parse(await c.req.json());
+  return c.json({ agent: await agentConfigService.create(input as AgentConfigInput) }, 201);
+});
+
+agentRoutes.get("/:id", async (c) => {
+  try {
+    return c.json({ agent: await agentConfigService.get(c.req.param("id")) });
+  } catch (cause) {
+    return c.json({ error: cause instanceof Error ? cause.message : "Agent not found" }, 404);
+  }
+});
+
+agentRoutes.put("/:id", async (c) => {
+  const input = updateAgentSchema.parse(await c.req.json());
+  try {
+    return c.json({ agent: await agentConfigService.update(c.req.param("id"), input as AgentConfigInput) });
+  } catch (cause) {
+    return c.json({ error: cause instanceof Error ? cause.message : "Update failed" }, 400);
+  }
+});
+
+agentRoutes.delete("/:id", async (c) => {
+  try {
+    await agentConfigService.remove(c.req.param("id"));
+    return c.json({ ok: true });
+  } catch (cause) {
+    return c.json({ error: cause instanceof Error ? cause.message : "Delete failed" }, 400);
+  }
 });

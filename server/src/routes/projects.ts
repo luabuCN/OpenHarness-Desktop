@@ -9,7 +9,8 @@ const createProjectSchema = z.object({
   rootPath: z.string().trim().min(1),
   description: z.string().trim().max(500).optional(),
   defaultAgentId: z.string().trim().min(1).max(100).optional(),
-  defaultModelId: z.string().trim().min(1).max(200).optional(),
+  defaultProviderId: z.string().trim().min(1).nullable().optional(),
+  defaultModelId: z.string().trim().min(1).max(200).nullable().optional(),
 });
 
 const updateProjectSchema = createProjectSchema.partial().extend({
@@ -22,6 +23,42 @@ async function assertRootDirectory(value: string): Promise<string> {
   const stat = await fs.stat(resolved).catch(() => null);
   if (!stat?.isDirectory()) throw new Error("项目路径不存在或不是目录");
   return resolved;
+}
+
+async function assertDefaults(input: {
+  defaultAgentId?: string | null;
+  defaultProviderId?: string | null;
+  defaultModelId?: string | null;
+}, current?: { defaultAgentId?: string | null; defaultProviderId?: string | null; defaultModelId?: string | null }) {
+  const agentId = input.defaultAgentId === undefined ? current?.defaultAgentId : input.defaultAgentId;
+  const providerId =
+    input.defaultProviderId === undefined ? current?.defaultProviderId : input.defaultProviderId;
+  const modelId =
+    input.defaultModelId === undefined ? current?.defaultModelId : input.defaultModelId;
+
+  if (agentId) {
+    const agent = await prisma.agentConfig.findUnique({ where: { id: agentId } });
+    if (!agent?.isActive) throw new Error("默认 Agent 不存在或未启用");
+  }
+  if (providerId && !modelId) throw new Error("选择默认 Provider 时必须同时选择默认模型");
+
+  if (providerId && modelId) {
+    const provider = await prisma.provider.findUnique({ where: { id: providerId } });
+    if (!provider?.isActive) throw new Error("默认 Provider 不存在或未启用");
+    try {
+      const models = provider.models ? JSON.parse(provider.models) as unknown[] : [];
+      const enabled = models.filter(
+        (entry): entry is { id: string; enabled?: boolean } =>
+          typeof entry === "object" && entry !== null && typeof (entry as { id?: unknown }).id === "string",
+      );
+      if (enabled.length > 0 && !enabled.some((entry) => entry.enabled !== false && entry.id === modelId)) {
+        throw new Error("默认模型未启用");
+      }
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new Error("供应商模型配置无效");
+      throw error;
+    }
+  }
 }
 
 function serializeProject(project: Awaited<ReturnType<typeof prisma.project.findFirstOrThrow>>) {
@@ -56,6 +93,12 @@ projectRoutes.post("/", async (c) => {
     return c.json({ error: error instanceof Error ? error.message : "Invalid project path" }, 400);
   }
 
+  try {
+    await assertDefaults(input);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Invalid project defaults" }, 400);
+  }
+
   const project = await prisma.project.create({ data: { ...input, rootPath } });
   return c.json({ project: serializeProject(project) }, 201);
 });
@@ -73,6 +116,13 @@ projectRoutes.put("/:id", async (c) => {
 
   const { rootPath: requestedRootPath, ...data } = input;
   void requestedRootPath;
+  try {
+    const current = await prisma.project.findUnique({ where: { id: c.req.param("id") } });
+    if (!current) return c.json({ error: "Project not found" }, 404);
+    await assertDefaults(input, current);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Invalid project defaults" }, 400);
+  }
   const project = await prisma.project.update({
     where: { id: c.req.param("id") },
     data: {

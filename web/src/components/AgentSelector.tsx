@@ -64,11 +64,11 @@ export function AgentSelector({ value, onChange, className }: AgentSelectorProps
       </DialogTrigger>
 
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md">
-        <DialogTitle className="sr-only">Select agent</DialogTitle>
+        <DialogTitle className="sr-only">选择 Agent</DialogTitle>
         <Command>
-          <CommandInput placeholder="Search agents..." />
+          <CommandInput placeholder="搜索 Agent..." />
           <CommandList>
-            <CommandEmpty>{loading ? "Loading…" : "No agents found."}</CommandEmpty>
+            <CommandEmpty>{loading ? "加载中…" : "未找到 Agent"}</CommandEmpty>
             <CommandGroup>
               {agents.map((agent) => (
                 <CommandItem

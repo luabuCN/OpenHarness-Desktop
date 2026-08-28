@@ -214,6 +214,38 @@ export interface ModelSelection {
   modelId: string;
 }
 
+interface ConfiguredModelDefault {
+  providerId?: string | null;
+  modelId?: string | null;
+}
+
+export async function resolveConfiguredSelection(
+  ...defaults: Array<ConfiguredModelDefault | undefined>
+): Promise<ModelSelection | undefined> {
+  const providers = await prisma.provider.findMany({ orderBy: { createdAt: "asc" } });
+  const active = providers.filter((provider) => provider.isActive);
+  const isEnabledModel = (providerId: string, modelId: string) => {
+    const provider = active.find((entry) => entry.id === providerId);
+    if (!provider) return false;
+    const models = parseModels(provider.models);
+    return models.length === 0 || models.some((model) => model.enabled && model.id === modelId);
+  };
+  for (const entry of defaults) {
+    if (entry?.providerId && entry.modelId && isEnabledModel(entry.providerId, entry.modelId)) {
+      return { providerId: entry.providerId, modelId: entry.modelId };
+    }
+  }
+
+  const modelOnly = defaults.find((entry) => !entry?.providerId && entry?.modelId);
+  if (modelOnly?.modelId) {
+    const provider = active.find((entry) =>
+      parseModels(entry.models).some((model) => model.enabled && model.id === modelOnly.modelId),
+    );
+    if (provider) return { providerId: provider.id, modelId: modelOnly.modelId };
+  }
+  return undefined;
+}
+
 /**
  * Resolve an explicit per-request model selection (provider + model chosen
  * in the chat prompt input). The provider must exist and be active.
@@ -222,6 +254,10 @@ export async function resolveSelectionConfig(selection: ModelSelection): Promise
   const provider = await prisma.provider.findUnique({ where: { id: selection.providerId } });
   if (!provider?.isActive) {
     throw new Error("所选供应商不可用，请在设置中检查供应商配置");
+  }
+  const enabledModels = parseModels(provider.models);
+  if (enabledModels.length > 0 && !enabledModels.some((model) => model.enabled && model.id === selection.modelId)) {
+    throw new Error("所选模型未启用，请在设置中重新选择模型");
   }
   return {
     baseURL: provider.apiBase,

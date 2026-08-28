@@ -3,6 +3,8 @@ import { createTool, type ToolAction } from "@mastra/core/tools";
 import { z } from "zod";
 import { config, workspaceDir } from "../env.js";
 import { FileTooLargeError, SafeFsProvider, SafeShellProvider } from "../safe-fs.js";
+import { taskService } from "./task-service.js";
+import { TOOL_CATALOG, type ToolPermissionMap, type ToolPolicy } from "./tool-catalog.js";
 
 export type RuntimeTool = ToolAction<any, any, any, any, any>;
 
@@ -19,7 +21,45 @@ export interface ApprovalBridge {
 export interface ToolRegistryOptions {
   rootPath?: string;
   enableBash?: boolean;
+  approvals?: ApprovalBridge;
   bashApprovals?: ApprovalBridge;
+  toolPermissions?: ToolPermissionMap;
+  taskContext?: {
+    conversationId: string;
+    runId?: string;
+  };
+}
+
+async function requestApproval(
+  approvals: ApprovalBridge | undefined,
+  toolName: string,
+  input: unknown,
+) {
+  if (!approvals) {
+    throw new Error(`${toolName} requires approval, but no approval bridge is available.`);
+  }
+  const decision = await approvals.request(
+    toolName,
+    JSON.stringify(input, null, 2).slice(0, 20_000),
+  );
+  if (decision.kind === "approved") return;
+  if (decision.kind === "aborted") {
+    throw new Error(`${toolName} approval was cancelled because the run stopped.`);
+  }
+  if (decision.kind === "timeout") {
+    throw new Error(`${toolName} approval timed out.`);
+  }
+  throw new Error(
+    decision.reason
+      ? `User rejected ${toolName}: ${decision.reason}`
+      : `User rejected ${toolName}.`,
+  );
+}
+
+function previewText(value: string, maxLength = 4_000): string {
+  return value.length <= maxLength
+    ? value
+    : `${value.slice(0, maxLength)}\n... (${value.length - maxLength} more characters)`;
 }
 
 type ToolSource = "builtin" | "workspace";
@@ -245,7 +285,11 @@ function createGrepTool(fsProvider: SafeFsProvider): RuntimeTool {
   });
 }
 
-function createWriteFileTool(fsProvider: SafeFsProvider): RuntimeTool {
+function createWriteFileTool(
+  fsProvider: SafeFsProvider,
+  approvals: ApprovalBridge | undefined,
+  policy: ToolPolicy,
+): RuntimeTool {
   return createTool({
     id: "writeFile",
     description:
@@ -255,6 +299,13 @@ function createWriteFileTool(fsProvider: SafeFsProvider): RuntimeTool {
       content: z.string().describe("The full file contents to write"),
     }),
     execute: async ({ filePath, content }) => {
+      if (policy.requireApproval) {
+        await requestApproval(approvals, "writeFile", {
+          filePath,
+          byteCount: Buffer.byteLength(content, "utf8"),
+          contentPreview: previewText(content),
+        });
+      }
       if (Buffer.byteLength(content, "utf8") > MAX_WRITE_BYTES) {
         return { error: `Content exceeds the ${formatBytes(MAX_WRITE_BYTES)} write limit.` };
       }
@@ -269,7 +320,11 @@ function createWriteFileTool(fsProvider: SafeFsProvider): RuntimeTool {
   });
 }
 
-function createEditFileTool(fsProvider: SafeFsProvider): RuntimeTool {
+function createEditFileTool(
+  fsProvider: SafeFsProvider,
+  approvals: ApprovalBridge | undefined,
+  policy: ToolPolicy,
+): RuntimeTool {
   return createTool({
     id: "editFile",
     description:
@@ -282,6 +337,14 @@ function createEditFileTool(fsProvider: SafeFsProvider): RuntimeTool {
         .describe("Number of exact occurrences to replace; defaults to 1"),
     }),
     execute: async ({ filePath, oldString, newString, expectedReplacements = 1 }) => {
+      if (policy.requireApproval) {
+        await requestApproval(approvals, "editFile", {
+          filePath,
+          expectedReplacements,
+          oldStringPreview: previewText(oldString),
+          newStringPreview: previewText(newString),
+        });
+      }
       const resolved = fsProvider.resolvePath(filePath);
       if (isBinaryPath(resolved)) return { error: "editFile cannot modify binary files." };
       const original = await fsProvider.readFile(resolved).catch(() => null);
@@ -315,12 +378,19 @@ function createEditFileTool(fsProvider: SafeFsProvider): RuntimeTool {
   });
 }
 
-function createMkdirTool(fsProvider: SafeFsProvider): RuntimeTool {
+function createMkdirTool(
+  fsProvider: SafeFsProvider,
+  approvals: ApprovalBridge | undefined,
+  policy: ToolPolicy,
+): RuntimeTool {
   return createTool({
     id: "mkdir",
     description: "Create a directory and missing parent directories.",
     inputSchema: z.object({ dirPath: z.string().min(1) }),
     execute: async ({ dirPath }) => {
+      if (policy.requireApproval) {
+        await requestApproval(approvals, "mkdir", { dirPath });
+      }
       const resolved = fsProvider.resolvePath(dirPath);
       await fsProvider.mkdir(resolved, { recursive: true });
       return { dirPath: resolved };
@@ -331,6 +401,7 @@ function createMkdirTool(fsProvider: SafeFsProvider): RuntimeTool {
 function createBashTool(options: {
   rootPath: string;
   approvals?: ApprovalBridge;
+  policy: ToolPolicy;
 }): RuntimeTool {
   const shellProvider = new SafeShellProvider(options.rootPath);
   return createTool({
@@ -342,25 +413,12 @@ function createBashTool(options: {
       timeout: z.number().int().min(1_000).max(300_000).optional().default(30_000),
     }),
     execute: async ({ command, timeout }) => {
-      if (options.approvals) {
-        const decision = await options.approvals.request("bash", command);
-        if (decision.kind === "aborted") {
-          return { error: "Command approval was cancelled because the run stopped." };
-        }
-        if (decision.kind === "timeout") {
-          return { error: "Command approval timed out. Ask the user to approve it and try again." };
-        }
-        if (decision.kind === "rejected") {
-          return {
-            error: decision.reason
-              ? `User rejected the command: ${decision.reason}`
-              : "User rejected this command.",
-          };
-        }
-      } else if (!config.enableBash) {
+      if (!options.approvals && !config.enableBash) {
         return { error: "Bash is disabled for this agent run." };
       }
-
+      if (options.policy.requireApproval) {
+        await requestApproval(options.approvals, "bash", { command, timeout });
+      }
       return shellProvider.exec(command, { timeout });
     },
   });
@@ -372,6 +430,80 @@ const announceTool = createTool({
   inputSchema: z.object({ message: z.string() }),
   execute: async ({ message }) => message,
 });
+
+function createTaskTools(context: NonNullable<ToolRegistryOptions["taskContext"]>): Record<string, RuntimeTool> {
+  const taskId = z.string().regex(/^\d+$/).describe("Task ID, for example 1");
+
+  return {
+    TaskCreate: createTool({
+      id: "TaskCreate",
+      description:
+        "Create a persistent task for a complex multi-step request. Check TaskList first to avoid duplicates.",
+      inputSchema: z.object({
+        subject: z.string().min(1).max(300).describe("Short imperative title"),
+        description: z.string().max(4_000).optional().describe("Requirements and acceptance criteria"),
+        activeForm: z.string().max(200).optional().describe("Present-progressive status label"),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      }).strict(),
+      execute: async (input) => {
+        try {
+          const task = await taskService.create({ ...input, ...context });
+          return { task };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    }),
+    TaskGet: createTool({
+      id: "TaskGet",
+      description: "Get one task, including its description, owner, and dependencies.",
+      inputSchema: z.object({ taskId }).strict(),
+      execute: async ({ taskId: id }) => {
+        try {
+          return { task: await taskService.get(context.conversationId, id) };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    }),
+    TaskList: createTool({
+      id: "TaskList",
+      description: "List persistent tasks for this conversation.",
+      inputSchema: z.object({}).strict(),
+      execute: async () => {
+        try {
+          const tasks = await taskService.list(context.conversationId);
+          return { count: tasks.length, tasks };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    }),
+    TaskUpdate: createTool({
+      id: "TaskUpdate",
+      description:
+        "Update task status or details and add dependencies. Mark completed only after the work is verified.",
+      inputSchema: z.object({
+        taskId,
+        subject: z.string().min(1).max(300).optional(),
+        description: z.string().max(4_000).optional(),
+        activeForm: z.string().max(200).optional(),
+        status: z.enum(["pending", "in_progress", "completed"]).optional(),
+        owner: z.string().max(120).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+        addBlockedBy: z.array(taskId).max(100).optional(),
+        addBlocks: z.array(taskId).max(100).optional(),
+      }).strict(),
+      execute: async ({ taskId: id, ...input }) => {
+        try {
+          return { task: await taskService.update(context.conversationId, id, input) };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    }),
+  };
+}
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolRegistration>();
@@ -399,29 +531,48 @@ export function createToolRegistry(options: ToolRegistryOptions & { readOnly?: b
   const rootPath = options.rootPath ?? workspaceDir;
   const fsProvider = new SafeFsProvider(rootPath);
   const registry = new ToolRegistry();
+  const approvals = options.approvals ?? options.bashApprovals;
+  const policyFor = (name: string): ToolPolicy => {
+    const entry = TOOL_CATALOG.find((tool) => tool.name === name);
+    const base: ToolPolicy = entry
+      ? { ...entry.defaultPolicy }
+      : { enabled: true, requireApproval: false };
+    if (options.readOnly && entry?.mutating) return { enabled: false, requireApproval: false };
+    const override = options.toolPermissions?.[name];
+    return {
+      enabled: override?.enabled ?? base.enabled,
+      requireApproval: override?.requireApproval ?? base.requireApproval,
+    };
+  };
+  const filterTools = (
+    tools: Record<string, RuntimeTool>,
+  ): Record<string, RuntimeTool> =>
+    Object.fromEntries(
+      Object.entries(tools).filter(([name]) => policyFor(name).enabled || (name === "bash" && options.enableBash === true)),
+    );
 
-  registry.register("builtin", {
+  registry.register("builtin", filterTools({
     announce: announceTool,
     readFile: createReadFileTool(fsProvider),
     listFiles: createListFilesTool(fsProvider),
     glob: createGlobTool(fsProvider),
     grep: createGrepTool(fsProvider),
-  });
+    ...(options.taskContext ? createTaskTools(options.taskContext) : {}),
+  }));
 
-  if (!options.readOnly) {
-    registry.register("workspace", {
-      writeFile: createWriteFileTool(fsProvider),
-      editFile: createEditFileTool(fsProvider),
-      mkdir: createMkdirTool(fsProvider),
-    });
-    // Mutating commands remain behind an interactive approval bridge even when
-    // the environment allows shell access.
-    if (options.bashApprovals || options.enableBash || config.enableBash) {
-      registry.register("workspace", {
-        bash: createBashTool({ rootPath, approvals: options.bashApprovals }),
-      });
-    }
-  }
+  registry.register("workspace", filterTools({
+    writeFile: createWriteFileTool(fsProvider, approvals, policyFor("writeFile")),
+    editFile: createEditFileTool(fsProvider, approvals, policyFor("editFile")),
+    mkdir: createMkdirTool(fsProvider, approvals, policyFor("mkdir")),
+    bash: createBashTool({
+      rootPath,
+      approvals,
+      policy: {
+        ...policyFor("bash"),
+        enabled: policyFor("bash").enabled || Boolean(options.enableBash),
+      },
+    }),
+  }));
 
   return registry;
 }

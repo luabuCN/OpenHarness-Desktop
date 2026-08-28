@@ -1,5 +1,6 @@
 import "./env.js";
 import { PrismaClient } from "@prisma/client";
+import { builtInAgentRows } from "./runtime/agent-defaults.js";
 
 export const prisma = new PrismaClient();
 
@@ -63,6 +64,7 @@ export async function ensureSchema() {
       "rootPath" TEXT NOT NULL,
       "description" TEXT,
       "defaultAgentId" TEXT,
+      "defaultProviderId" TEXT,
       "defaultModelId" TEXT,
       "isActive" BOOLEAN NOT NULL DEFAULT true,
       "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -72,6 +74,9 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE UNIQUE INDEX IF NOT EXISTS "Project_name_key" ON "Project" ("name")',
   );
+  await addColumnIfMissing(`
+    ALTER TABLE "Project" ADD COLUMN "defaultProviderId" TEXT
+  `);
   await addColumnIfMissing(`
     ALTER TABLE "Conversation" ADD COLUMN "projectId" TEXT
       REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -144,6 +149,72 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "ToolApproval_runId_status_idx" ON "ToolApproval" ("runId", "status")',
   );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "AgentTask" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "conversationId" TEXT NOT NULL,
+      "runId" TEXT,
+      "taskId" INTEGER NOT NULL,
+      "subject" TEXT NOT NULL,
+      "description" TEXT,
+      "status" TEXT NOT NULL DEFAULT 'pending',
+      "activeForm" TEXT,
+      "owner" TEXT,
+      "metadata" TEXT,
+      "blockedBy" TEXT,
+      "blocks" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "AgentTask_conversationId_fkey"
+        FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT "AgentTask_runId_fkey"
+        FOREIGN KEY ("runId") REFERENCES "ThreadRun"("id")
+        ON DELETE SET NULL ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "AgentTask_conversationId_taskId_key" ON "AgentTask" ("conversationId", "taskId")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "AgentTask_conversationId_status_taskId_idx" ON "AgentTask" ("conversationId", "status", "taskId")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "AgentTask_runId_idx" ON "AgentTask" ("runId")',
+  );
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "AgentConfig" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "name" TEXT NOT NULL,
+      "description" TEXT NOT NULL,
+      "instructions" TEXT NOT NULL,
+      "toolPermissions" TEXT NOT NULL,
+      "subAgents" TEXT NOT NULL,
+      "defaultProviderId" TEXT,
+      "defaultModelId" TEXT,
+      "isActive" BOOLEAN NOT NULL DEFAULT true,
+      "isBuiltIn" BOOLEAN NOT NULL DEFAULT false,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "AgentConfig_name_key" ON "AgentConfig" ("name")',
+  );
+  for (const agent of builtInAgentRows()) {
+    await prisma.agentConfig.upsert({
+      where: { id: agent.id },
+      create: { ...agent, isBuiltIn: true },
+      update: {
+        description: agent.description,
+        instructions: agent.instructions,
+        toolPermissions: agent.toolPermissions,
+        subAgents: agent.subAgents,
+        isBuiltIn: true,
+      },
+    });
+  }
 
   const staleStatuses = ["queued", "running", "waiting_approval"];
   await prisma.threadRun.updateMany({

@@ -5,6 +5,8 @@ import {
   apiFetch,
   API_URL,
   listConversationRuns,
+  listConversationTasks,
+  listAgents,
   listProjects,
   listProviders,
   decideApproval,
@@ -13,6 +15,8 @@ import {
   type ProviderInfo,
   type RunInfo,
   type SessionSummary,
+  type AgentTaskInfo,
+  type AgentInfo,
 } from "./api";
 import type { ThinkingMode } from "./api";
 import { ChatPane } from "./components/ChatPane";
@@ -38,7 +42,8 @@ interface SessionViewProps {
   sessionId: string;
   title: string;
   providers: ProviderInfo[];
-  selection: ModelSelection | null;
+  requestSelection: ModelSelection | null;
+  displaySelection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
   thinkingMode: ThinkingMode;
   agentId?: string;
@@ -56,7 +61,8 @@ function SessionView({
   sessionId,
   title,
   providers,
-  selection,
+  requestSelection,
+  displaySelection,
   onSelectionChange,
   thinkingMode,
   agentId,
@@ -77,6 +83,7 @@ function SessionView({
   const agentIdRef = useRef(agentId);
   const projectIdRef = useRef(projectId);
   const [runs, setRuns] = useState<RunInfo[]>([]);
+  const [tasks, setTasks] = useState<AgentTaskInfo[]>([]);
 
   useEffect(() => {
     thinkingModeRef.current = thinkingMode;
@@ -89,6 +96,12 @@ function SessionView({
   useEffect(() => {
     projectIdRef.current = projectId;
   }, [projectId]);
+
+  const refreshTasks = useCallback(() => {
+    void listConversationTasks(sessionId)
+      .then(setTasks)
+      .catch(() => undefined);
+  }, [sessionId]);
 
   const transport = useMemo(
     () =>
@@ -110,11 +123,11 @@ function SessionView({
               typeof body?.projectId === "string" && body.projectId
                 ? body.projectId
                 : projectIdRef.current,
-            ...(selection ? { model: selection } : {}),
+            ...(requestSelection ? { model: requestSelection } : {}),
           },
         }),
       }),
-    [sessionId, projectId, selection],
+    [sessionId, projectId, requestSelection],
   );
 
   const chat: UseChatHelpers<ChatUIMessage> = useChat<ChatUIMessage>({
@@ -156,6 +169,20 @@ function SessionView({
       window.clearInterval(timer);
     };
   }, [busy, sessionId]);
+
+  useEffect(() => {
+    refreshTasks();
+  }, [refreshTasks]);
+
+  useEffect(() => {
+    if (!busy) {
+      const timer = window.setTimeout(refreshTasks, 500);
+      return () => window.clearTimeout(timer);
+    }
+
+    const timer = window.setInterval(refreshTasks, 1_500);
+    return () => window.clearInterval(timer);
+  }, [busy, refreshTasks]);
 
   const pendingApprovals = runs.flatMap((run) =>
     run.approvals
@@ -234,7 +261,7 @@ function SessionView({
         chat={chat}
         title={title}
         providers={providers}
-        selection={selection}
+        displaySelection={displaySelection}
         onSelectionChange={onSelectionChange}
         thinkingMode={thinkingMode}
         onThinkingModeChange={onThinkingModeChange}
@@ -266,6 +293,7 @@ function SessionView({
       {panelOpen ? (
         <RightPanel
           messages={chat.messages}
+          tasks={tasks}
           tab={tab}
           onTabChange={setTab}
           selectedToolId={selectedToolId}
@@ -293,6 +321,7 @@ export function App() {
   );
   const [view, setView] = useState<"chat" | "settings">("chat");
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [modelSelection, setModelSelection] = useState<ModelSelection | null>(null);
   const [projectId, setProjectId] = useState<string | undefined>(
@@ -305,22 +334,34 @@ export function App() {
       .catch(() => undefined);
   }, []);
 
-  const effectiveSelection = useMemo(() => {
-    if (
-      modelSelection &&
+  const isValidSelection = useCallback(
+    (selection: ModelSelection | null | undefined): selection is ModelSelection =>
+      !!selection &&
       providers.some(
         (provider) =>
           provider.isActive &&
-          provider.id === modelSelection.providerId &&
-          provider.models.some(
-            (model) => model.enabled && model.id === modelSelection.modelId,
-          ),
-      )
-    ) {
-      return modelSelection;
-    }
-    return defaultModelSelection(providers);
-  }, [modelSelection, providers]);
+          provider.id === selection.providerId &&
+          provider.models.some((model) => model.enabled && model.id === selection.modelId),
+      ),
+    [providers],
+  );
+
+  const resolveConfiguredSelection = useCallback(
+    (providerId?: string | null, modelId?: string | null): ModelSelection | null => {
+      if (providerId && modelId) {
+        const selection = { providerId, modelId };
+        return isValidSelection(selection) ? selection : null;
+      }
+      if (!modelId) return null;
+      const provider = providers.find(
+        (entry) =>
+          entry.isActive &&
+          entry.models.some((model) => model.enabled && model.id === modelId),
+      );
+      return provider ? { providerId: provider.id, modelId } : null;
+    },
+    [isValidSelection, providers],
+  );
 
   const refreshSessions = useCallback(async () => {
     setLoadingSessions(true);
@@ -329,7 +370,7 @@ export function App() {
       setSessions(data.sessions);
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Cannot reach local service");
+      setError(cause instanceof Error ? cause.message : "无法连接本地服务");
     } finally {
       setLoadingSessions(false);
     }
@@ -338,6 +379,16 @@ export function App() {
   useEffect(() => {
     refreshProviders();
   }, [refreshProviders]);
+
+  const refreshAgents = useCallback(() => {
+    void listAgents()
+      .then(setAgents)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refreshAgents();
+  }, [refreshAgents]);
 
   const refreshProjects = useCallback(() => {
     void listProjects()
@@ -386,7 +437,30 @@ export function App() {
   }, [refreshSessions, sessionId]);
 
   const initialMessages = useMemo(() => messages, [messages]);
-  const title = sessions.find((session) => session.id === sessionId)?.title ?? "New chat";
+  const selectedProject = projects.find((project) => project.id === projectId);
+  const selectedAgent = agents.find((agent) => agent.id === agentId);
+  const displaySelection = useMemo(() => {
+    if (isValidSelection(modelSelection)) return modelSelection;
+    return (
+      resolveConfiguredSelection(
+        selectedProject?.defaultProviderId,
+        selectedProject?.defaultModelId,
+      ) ??
+      resolveConfiguredSelection(
+        selectedAgent?.defaultProviderId,
+        selectedAgent?.defaultModelId,
+      ) ??
+      defaultModelSelection(providers)
+    );
+  }, [
+    isValidSelection,
+    modelSelection,
+    providers,
+    resolveConfiguredSelection,
+    selectedAgent,
+    selectedProject,
+  ]);
+  const title = sessions.find((session) => session.id === sessionId)?.title ?? "新建对话";
 
   function selectSession(id: string) {
     if (id === sessionId) return;
@@ -421,7 +495,11 @@ export function App() {
       {view === "settings" && (
         <SettingsPage
           onExit={() => setView("chat")}
-          onChanged={refreshProviders}
+          onChanged={() => {
+            refreshProviders();
+            refreshProjects();
+            refreshAgents();
+          }}
         />
       )}
       <div className={cn("flex min-w-0 flex-1", view === "settings" && "hidden")}>
@@ -430,7 +508,8 @@ export function App() {
           sessionId={sessionId}
           title={title}
           providers={providers}
-          selection={effectiveSelection}
+          requestSelection={modelSelection}
+          displaySelection={displaySelection}
           onSelectionChange={setModelSelection}
           thinkingMode={thinkingMode}
           onThinkingModeChange={setThinkingMode}

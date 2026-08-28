@@ -1,18 +1,28 @@
 import { useState } from "react";
-import { ArrowLeft, Cloud } from "lucide-react";
+import { ArrowLeft, Bot, Cloud, FolderOpen, ShieldCheck, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { ProvidersSection } from "./ProvidersSection";
+import { AgentsSection } from "./AgentsSection";
+import { PermissionsSection } from "./PermissionsSection";
+import { ProjectsSection } from "./ProjectsSection";
+import { ToolsSection } from "./ToolsSection";
 
-type SettingsSectionKey = "providers";
+type SettingsSectionKey = "projects" | "agents" | "models" | "tools" | "permissions";
 
 const NAV_ITEMS: {
   key: SettingsSectionKey;
   label: string;
   icon: typeof Cloud;
-}[] = [{ key: "providers", label: "模型供应商", icon: Cloud }];
+}[] = [
+  { key: "projects", label: "项目", icon: FolderOpen },
+  { key: "agents", label: "Agent", icon: Bot },
+  { key: "models", label: "模型", icon: Cloud },
+  { key: "tools", label: "工具", icon: Wrench },
+  { key: "permissions", label: "权限", icon: ShieldCheck },
+];
 
 interface SettingsPageProps {
   onExit: () => void;
@@ -20,7 +30,7 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ onExit, onChanged }: SettingsPageProps) {
-  const [section, setSection] = useState<SettingsSectionKey>("providers");
+  const [section, setSection] = useState<SettingsSectionKey>("projects");
   const active = NAV_ITEMS.find((item) => item.key === section) ?? NAV_ITEMS[0];
 
   return (
@@ -57,7 +67,11 @@ export function SettingsPage({ onExit, onChanged }: SettingsPageProps) {
         </nav>
 
         <div className="min-w-0 flex-1 overflow-y-auto">
-          <ProvidersSection onChanged={onChanged} />
+          {section === "projects" ? <ProjectsSection onChanged={onChanged} /> : null}
+          {section === "agents" ? <AgentsSection onChanged={onChanged} /> : null}
+          {section === "models" ? <ProvidersSection onChanged={onChanged} /> : null}
+          {section === "tools" ? <ToolsSection /> : null}
+          {section === "permissions" ? <PermissionsSection onChanged={onChanged} /> : null}
         </div>
       </div>
     </section>

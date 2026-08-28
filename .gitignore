@@ -4,6 +4,8 @@ dist/
 .env.local
 *.tsbuildinfo
 .local-test/
+.tmp*/
+.local-data/
 server/sidecar/
 server/sea/
 server/.local-data*/

@@ -35,22 +35,22 @@ export function Sidebar({
         <div className="min-w-0">
           <strong className="block truncate text-sm">OpenHarness</strong>
           <small className="block truncate text-xs text-muted-foreground">
-            Local desktop runtime
+            本地桌面运行时
           </small>
         </div>
       </div>
 
       <div className="p-3">
         <Button className="w-full" onClick={onNew} size="sm">
-          New chat
+          新建对话
         </Button>
       </div>
 
-      <div className="px-4 pb-1 text-xs font-medium text-muted-foreground">Chats</div>
+      <div className="px-4 pb-1 text-xs font-medium text-muted-foreground">对话记录</div>
       <div className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
         {sessions.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-            No conversations yet.
+            暂无对话
           </p>
         ) : (
           sessions.map((session) => (
@@ -77,7 +77,7 @@ export function Sidebar({
                 type="button"
                 className="mr-1 hidden size-7 place-items-center rounded text-muted-foreground hover:text-destructive group-hover:grid"
                 onClick={() => onDelete(session.id)}
-                title="Delete chat"
+                title="删除对话"
               >
                 <Trash2 size={14} />
               </button>
@@ -90,14 +90,14 @@ export function Sidebar({
         {error ? (
           <span className="truncate text-destructive">{error}</span>
         ) : (
-          <span className="truncate">SQLite · Hono sidecar</span>
+          <span className="truncate">SQLite · Hono 本地服务</span>
         )}
         <Button
           variant="ghost"
           size="icon-sm"
           onClick={onRefresh}
           disabled={loading}
-          title="Refresh sessions"
+          title="刷新对话列表"
         >
           <RefreshCw size={14} />
         </Button>

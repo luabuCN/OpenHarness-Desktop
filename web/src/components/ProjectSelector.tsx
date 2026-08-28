@@ -64,25 +64,25 @@ export function ProjectSelector({
           title="选择项目工作区"
         >
           <FolderOpenIcon className="size-3 shrink-0" />
-          <span className="truncate">{selected?.name ?? "Local workspace"}</span>
+          <span className="truncate">{selected?.name ?? "本地工作区"}</span>
         </button>
       </DialogTrigger>
 
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg">
-        <DialogTitle className="sr-only">Select project</DialogTitle>
+        <DialogTitle className="sr-only">选择项目</DialogTitle>
         <Command>
-          <CommandInput placeholder="Search projects..." />
+          <CommandInput placeholder="搜索项目..." />
           <CommandList>
-            <CommandEmpty>{projects.length === 0 ? "No saved projects." : "No matches."}</CommandEmpty>
-            <CommandGroup heading="Workspaces">
+            <CommandEmpty>{projects.length === 0 ? "暂无已保存的项目" : "无匹配项"}</CommandEmpty>
+            <CommandGroup heading="工作区">
               <CommandItem
                 value="local workspace sandbox"
                 onSelect={() => { onSelectProject(undefined); setOpen(false); }}
                 className="justify-between gap-2 py-2"
               >
                 <div className="min-w-0">
-                  <span className="text-sm">Local workspace</span>
-                  <span className="block truncate text-xs text-muted-foreground">Application data workspace</span>
+                  <span className="text-sm">本地工作区</span>
+                  <span className="block truncate text-xs text-muted-foreground">应用数据工作区</span>
                 </div>
                 {!projectId ? <FolderOpenIcon className="size-4 shrink-0" /> : null}
               </CommandItem>

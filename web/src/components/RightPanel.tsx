@@ -7,7 +7,6 @@ import {
   ListTodoIcon,
   LoaderCircleIcon,
   WrenchIcon,
-  XCircleIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CodeBlock } from "@/components/ai-elements/code-block";
@@ -19,20 +18,20 @@ import {
 import { getStatusBadge, ToolInput } from "@/components/ai-elements/tool";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { listFiles, type FileEntry } from "@/api";
+import { listFiles, type AgentTaskInfo, type FileEntry } from "@/api";
 import {
   collectToolCalls,
   collectUsage,
-  latestTodos,
   type ChatUIMessage,
   type ToolCallRef,
 } from "@/lib/chat-utils";
 import { cn } from "@/lib/utils";
 
-export type RightTab = "files" | "todos" | "preview" | "tools" | "usage";
+export type RightTab = "files" | "tasks" | "preview" | "tools" | "usage";
 
 export interface RightPanelProps {
   messages: ChatUIMessage[];
+  tasks: AgentTaskInfo[];
   tab: RightTab;
   onTabChange: (tab: RightTab) => void;
   selectedToolId?: string;
@@ -42,6 +41,7 @@ export interface RightPanelProps {
 
 export function RightPanel({
   messages,
+  tasks,
   tab,
   onTabChange,
   selectedToolId,
@@ -61,34 +61,34 @@ export function RightPanel({
         <TabsList className="group-data-[orientation=horizontal]/tabs:h-14 w-full shrink-0 justify-start gap-1 rounded-none border-b bg-transparent px-2">
           <TabsTrigger value="files" className="h-8 gap-1.5 text-xs">
             <FolderOpenIcon className="size-3.5" />
-            Files
+            文件
           </TabsTrigger>
-          <TabsTrigger value="todos" className="h-8 gap-1.5 text-xs">
+          <TabsTrigger value="tasks" className="h-8 gap-1.5 text-xs">
             <ListTodoIcon className="size-3.5" />
-            Todo List
+            任务
           </TabsTrigger>
           <TabsTrigger value="preview" className="h-8 gap-1.5 text-xs">
             <GlobeIcon className="size-3.5" />
-            Preview
+            预览
           </TabsTrigger>
           <TabsTrigger value="tools" className="h-8 gap-1.5 text-xs">
             <WrenchIcon className="size-3.5" />
-            Tool Result
+            工具结果
           </TabsTrigger>
           <TabsTrigger value="usage" className="h-8 gap-1.5 text-xs">
             <BarChart3Icon className="size-3.5" />
-            Usage
+            用量
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <WorkspaceFiles />
         </TabsContent>
-        <TabsContent value="todos" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
-          <TodoList messages={messages} />
+        <TabsContent value="tasks" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
+          <TaskList tasks={tasks} />
         </TabsContent>
         <TabsContent value="preview" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
-          <EmptyNote text="No preview available in this prototype." />
+          <EmptyNote text="该原型暂不支持预览。" />
         </TabsContent>
         <TabsContent value="tools" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <ToolResults
@@ -157,57 +157,87 @@ function WorkspaceFiles() {
       onSelect={setSelected}
       className="rounded-none border-0"
     >
-      {rootLoaded ? renderDir("") : <EmptyNote text="Loading workspace…" />}
+      {rootLoaded ? renderDir("") : <EmptyNote text="正在加载工作区…" />}
       {rootLoaded && (entries[""] ?? []).length === 0 ? (
-        <EmptyNote text="Workspace is empty." />
+        <EmptyNote text="工作区为空。" />
       ) : null}
     </FileTree>
   );
 }
 
-const TODO_STATUS_ICONS = {
+const TASK_STATUS_ICONS = {
   pending: <CircleIcon className="size-4 text-muted-foreground" />,
   in_progress: <LoaderCircleIcon className="size-4 animate-spin text-blue-600" />,
   completed: <CheckCircleIcon className="size-4 text-green-600" />,
-  cancelled: <XCircleIcon className="size-4 text-muted-foreground" />,
 } as const;
 
-function TodoList({ messages }: { messages: ChatUIMessage[] }) {
-  const todos = latestTodos(messages);
-
-  if (todos.length === 0) {
-    return <EmptyNote text="The agent has not created tasks in this session." />;
+function TaskList({ tasks }: { tasks: AgentTaskInfo[] }) {
+  if (tasks.length === 0) {
+    return <EmptyNote text="当前会话暂无任务。" />;
   }
 
+  const completedCount = tasks.filter((task) => task.status === "completed").length;
+
   return (
-    <ul className="space-y-2">
-      {todos.map((todo, index) => (
-        <li key={todo.id ?? index} className="flex items-start gap-2 rounded-md border p-2.5">
-          <span className="mt-0.5 shrink-0">{TODO_STATUS_ICONS[todo.status]}</span>
-          <span
-            className={cn(
-              "min-w-0 flex-1 text-sm",
-              (todo.status === "completed" || todo.status === "cancelled") &&
-                "text-muted-foreground line-through",
-            )}
-          >
-            {todo.content}
-          </span>
-          <Badge
-            variant={
-              todo.priority === "high"
-                ? "destructive"
-                : todo.priority === "medium"
-                  ? "secondary"
-                  : "outline"
-            }
-            className="shrink-0 text-[10px]"
-          >
-            {todo.priority}
-          </Badge>
-        </li>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>共 {tasks.length} 个</span>
+        <span>已完成 {completedCount} 个</span>
+      </div>
+      <ul className="space-y-2">
+        {tasks.map((task) => (
+          <li key={task.id} className="flex items-start gap-2.5 rounded-md border p-2.5">
+            <span className="mt-0.5 shrink-0">{TASK_STATUS_ICONS[task.status]}</span>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex items-start justify-between gap-2">
+                <p
+                  className={cn(
+                    "min-w-0 flex-1 text-sm font-medium",
+                    task.status === "completed" && "text-muted-foreground line-through",
+                  )}
+                >
+                  #{task.taskId} {task.subject}
+                </p>
+                <Badge
+                  variant={task.status === "completed" ? "secondary" : "outline"}
+                  className="shrink-0 text-[10px]"
+                >
+                  {task.status === "in_progress"
+                    ? "进行中"
+                    : task.status === "pending"
+                      ? "待处理"
+                      : "已完成"}
+                </Badge>
+              </div>
+              {task.status === "in_progress" && task.activeForm ? (
+                <p className="text-xs text-blue-600">{task.activeForm}</p>
+              ) : null}
+              {task.description ? (
+                <p className="text-xs text-muted-foreground">{task.description}</p>
+              ) : null}
+              {task.blockedBy.length > 0 ? <DependencyTags label="阻塞于" ids={task.blockedBy} /> : null}
+              {task.blocks.length > 0 ? <DependencyTags label="阻塞" ids={task.blocks} /> : null}
+              {task.owner ? (
+                <p className="font-mono text-[10px] text-muted-foreground">{task.owner}</p>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function DependencyTags({ label, ids }: { label: string; ids: string[] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+      <span>{label}</span>
+      {ids.map((id) => (
+        <Badge key={`${label}-${id}`} variant="outline" className="px-1.5 py-0 text-[10px]">
+          #{id}
+        </Badge>
       ))}
-    </ul>
+    </div>
   );
 }
 
@@ -224,7 +254,7 @@ function ToolResults({
   const selected = calls.find((call) => call.id === selectedToolId) ?? calls.at(-1);
 
   if (calls.length === 0) {
-    return <EmptyNote text="No tool calls in this session yet." />;
+    return <EmptyNote text="当前会话暂无工具调用。" />;
   }
 
   return (
@@ -290,14 +320,14 @@ function UsageView({ messages }: { messages: ChatUIMessage[] }) {
   const stats = collectUsage(messages);
 
   const cards = [
-    { label: "Agent turns", value: String(stats.turns) },
-    { label: "Agent time", value: `${(stats.totalTurnMs / 1000).toFixed(1)}s` },
-    { label: "Tool calls", value: String(stats.toolCalls) },
-    { label: "Subagents", value: String(stats.subagents) },
-    { label: "User messages", value: String(stats.userMessages) },
-    { label: "Assistant messages", value: String(stats.assistantMessages) },
-    { label: "Compactions", value: String(stats.compactions) },
-    { label: "Compacted messages", value: String(stats.messagesRemoved) },
+    { label: "Agent 轮次", value: String(stats.turns) },
+    { label: "Agent 耗时", value: `${(stats.totalTurnMs / 1000).toFixed(1)}s` },
+    { label: "工具调用", value: String(stats.toolCalls) },
+    { label: "子 Agent", value: String(stats.subagents) },
+    { label: "用户消息", value: String(stats.userMessages) },
+    { label: "助手消息", value: String(stats.assistantMessages) },
+    { label: "上下文压缩次数", value: String(stats.compactions) },
+    { label: "被压缩的消息", value: String(stats.messagesRemoved) },
   ];
 
   return (

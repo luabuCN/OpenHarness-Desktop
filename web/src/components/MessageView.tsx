@@ -92,7 +92,7 @@ export function MessageView({
       {isUser || !isStreaming ? (
         <MessageActions className={isUser ? "justify-end" : undefined}>
           <MessageAction
-            tooltip="Copy message"
+            tooltip="复制消息"
             onClick={() => void navigator.clipboard.writeText(messageText(message))}
           >
             <CopyIcon size={14} />
@@ -108,7 +108,7 @@ function FilePartView({ part }: { part: FileUIPart }) {
     return (
       <img
         src={part.url}
-        alt={part.filename ?? "attachment"}
+        alt={part.filename ?? "附件"}
         className="max-h-40 rounded-md border"
       />
     );
@@ -178,32 +178,32 @@ function DataPartView({ part }: { part: DataPart }): ReactNode {
     case "data-oh:subagent.start":
       return (
         <SystemNote icon={<BotIcon className="size-3.5" />}>
-          Subagent <strong>{part.data.agentName}</strong> started: {part.data.task}
+          子 Agent <strong>{part.data.agentName}</strong> 已启动：{part.data.task}
         </SystemNote>
       );
     case "data-oh:subagent.done":
       return (
         <SystemNote icon={<BotIcon className="size-3.5" />}>
-          Subagent <strong>{part.data.agentName}</strong> finished in{" "}
-          {(part.data.durationMs / 1000).toFixed(1)}s
+          子 Agent <strong>{part.data.agentName}</strong> 已完成，耗时{" "}
+          {(part.data.durationMs / 1000).toFixed(1)} 秒
         </SystemNote>
       );
     case "data-oh:subagent.error":
       return (
         <SystemNote icon={<BotIcon className="size-3.5" />}>
-          Subagent <strong>{part.data.agentName}</strong> failed: {part.data.error}
+          子 Agent <strong>{part.data.agentName}</strong> 失败：{part.data.error}
         </SystemNote>
       );
     case "data-oh:compaction.done":
       return (
         <SystemNote icon={<SquareStackIcon className="size-3.5" />}>
-          Context compacted ({part.data.messagesRemoved} messages removed)
+          上下文已压缩（移除 {part.data.messagesRemoved} 条消息）
         </SystemNote>
       );
     case "data-oh:retry":
       return (
         <SystemNote icon={<RefreshCwIcon className="size-3.5" />}>
-          Retrying (attempt {part.data.attempt}): {part.data.reason}
+          正在重试（第 {part.data.attempt} 次）：{part.data.reason}
         </SystemNote>
       );
     default:
