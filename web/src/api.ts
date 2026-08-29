@@ -43,6 +43,16 @@ export async function listFiles(path: string): Promise<FileEntry[]> {
   return data.entries;
 }
 
+export interface FileContent {
+  path: string;
+  size: number;
+  content: string;
+}
+
+export async function readFileContent(path: string): Promise<FileContent> {
+  return apiFetch<FileContent>(`/api/files/content?path=${encodeURIComponent(path)}`);
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,

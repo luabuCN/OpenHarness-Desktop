@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { FolderOpen, Loader2 } from "lucide-react";
 
 import {
   createProject,
@@ -42,7 +44,26 @@ export function ProjectForm({ editing = null, onSaved, onCancel }: ProjectFormPr
   const [modelId, setModelId] = useState(editing?.defaultModelId ?? "");
   const [isActive, setIsActive] = useState(editing?.isActive ?? true);
   const [saving, setSaving] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string>();
+
+  async function browseFolder() {
+    setPicking(true);
+    setError(undefined);
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected === "string" && selected) {
+        setRootPath(selected);
+        if (!name.trim()) {
+          setName(selected.split(/[\\/]/).filter(Boolean).at(-1) ?? "");
+        }
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "选择文件夹失败");
+    } finally {
+      setPicking(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -99,12 +120,30 @@ export function ProjectForm({ editing = null, onSaved, onCancel }: ProjectFormPr
         </Field>
         <Field>
           <FieldLabel htmlFor="project-root">本地路径</FieldLabel>
-          <Input
-            id="project-root"
-            value={rootPath}
-            onChange={(event) => setRootPath(event.target.value)}
-            placeholder="E:\path\to\project"
-          />
+          <div className="flex gap-2">
+            <Input
+              id="project-root"
+              value={rootPath}
+              onChange={(event) => setRootPath(event.target.value)}
+              placeholder="E:\path\to\project"
+              className="flex-1"
+            />
+            {isTauri() ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void browseFolder()}
+                disabled={picking}
+              >
+                {picking ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <FolderOpen size={14} />
+                )}
+                浏览
+              </Button>
+            ) : null}
+          </div>
         </Field>
         <Field>
           <FieldLabel htmlFor="project-description">描述</FieldLabel>

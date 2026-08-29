@@ -8,7 +8,7 @@ const createProjectSchema = z.object({
   name: z.string().trim().min(1).max(100),
   rootPath: z.string().trim().min(1),
   description: z.string().trim().max(500).optional(),
-  defaultAgentId: z.string().trim().min(1).max(100).optional(),
+  defaultAgentId: z.string().trim().min(1).max(100).nullable().optional(),
   defaultProviderId: z.string().trim().min(1).nullable().optional(),
   defaultModelId: z.string().trim().min(1).max(200).nullable().optional(),
 });

@@ -320,6 +320,7 @@ function SessionView({
           selectedToolId={selectedToolId}
           onToolSelect={setSelectedToolId}
           width={panelWidth}
+          project={projects.find((candidate) => candidate.id === projectId)}
         />
       ) : null}
     </>
@@ -492,7 +493,10 @@ export function App() {
   ]);
   const title = sessions.find((session) => session.id === sessionId)?.title ?? "新建对话";
 
-  function selectSession(id: string) {
+  function selectSession(id: string, nextProjectId?: string) {
+    // Opening a conversation nested under a project also switches the run
+    // context to that project; plain "最近" items leave the context alone.
+    if (nextProjectId !== undefined) setProjectId(nextProjectId);
     if (id === sessionId) return;
     setSessionId(id);
     setMessages([]);

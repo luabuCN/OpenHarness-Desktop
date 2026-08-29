@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -40,27 +40,12 @@ export interface AppSidebarProps {
   projects: ProjectInfo[];
   activeProjectId?: string;
   onSelectProject: (projectId?: string) => void;
-  onSelect: (id: string) => void;
+  /** Selecting a session under a project also switches the project context. */
+  onSelect: (id: string, projectId?: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
   onProjectsChanged: () => void;
   onOpenSettings: () => void;
-}
-
-function formatSessionTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const now = new Date();
-  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  const startOfDay = (target: Date) =>
-    new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
-  const diffDays = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
-  if (diffDays === 0) return `今天 ${time}`;
-  if (diffDays === 1) return `昨天 ${time}`;
-  if (date.getFullYear() === now.getFullYear()) {
-    return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
-  }
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
 function CollapsibleGroup({
@@ -85,6 +70,44 @@ function CollapsibleGroup({
   );
 }
 
+/**
+ * Single-line title with ellipsis; when the text overflows, hovering pauses a
+ * beat and then scrolls it back and forth until the pointer leaves.
+ */
+function ScrollableTitle({ text }: { text: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [scrollDistance, setScrollDistance] = useState<number>();
+
+  const handleMouseEnter = () => {
+    const element = ref.current;
+    if (!element) return;
+    const overflow = element.scrollWidth - element.clientWidth;
+    setScrollDistance(overflow > 4 ? overflow : undefined);
+  };
+
+  const style =
+    scrollDistance !== undefined
+      ? ({
+          "--scroll-distance": `${-scrollDistance}px`,
+          animation: `session-title-scroll ${Math.max(2, scrollDistance / 40).toFixed(2)}s ease-in-out 0.35s infinite alternate`,
+        } as CSSProperties)
+      : undefined;
+
+  return (
+    <span className="min-w-0 flex-1 overflow-hidden">
+      <span
+        ref={ref}
+        style={style}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={() => setScrollDistance(undefined)}
+        className="block truncate text-sm"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
 export function AppSidebar({
   sessions,
   sessionId,
@@ -100,14 +123,51 @@ export function AppSidebar({
   onOpenSettings,
 }: AppSidebarProps) {
   const [projectFormOpen, setProjectFormOpen] = useState(false);
+  // Undefined = never toggled; falls back to "open when project is active".
+  const [projectExpanded, setProjectExpanded] = useState<Record<string, boolean>>({});
 
-  const activeProject = projects.find((project) => project.id === activeProjectId);
+  const projectSessions = useMemo(() => {
+    const grouped = new Map<string, SessionSummary[]>();
+    for (const project of projects) grouped.set(project.id, []);
+    const recent: SessionSummary[] = [];
+    for (const session of sessions) {
+      if (session.projectId && grouped.has(session.projectId)) {
+        grouped.get(session.projectId)!.push(session);
+      } else if (!session.projectId) {
+        recent.push(session);
+      }
+    }
+    return { grouped, recent };
+  }, [sessions, projects]);
 
-  const visibleSessions = useMemo(
-    () =>
-      sessions.filter((session) => (session.projectId ?? undefined) === activeProjectId),
-    [sessions, activeProjectId],
+  const renderSessionItem = (session: SessionSummary, projectId?: string) => (
+    <SidebarMenuItem key={session.id}>
+      <SidebarMenuButton
+        isActive={session.id === sessionId}
+        onClick={() => onSelect(session.id, projectId)}
+      >
+        <ScrollableTitle text={session.title} />
+      </SidebarMenuButton>
+
+      <SidebarMenuAction
+        showOnHover
+        className="top-1/2! -translate-y-1/2 text-muted-foreground hover:text-destructive"
+        onClick={() => onDelete(session.id)}
+        title="删除对话"
+      >
+        <Trash2 />
+      </SidebarMenuAction>
+    </SidebarMenuItem>
   );
+
+  const sessionList = (items: SessionSummary[], projectId?: string) =>
+    items.length === 0 ? (
+      <p className="px-2 py-4 text-center text-xs text-muted-foreground">
+        {loading ? "加载中..." : "暂无对话"}
+      </p>
+    ) : (
+      <SidebarMenu>{items.map((session) => renderSessionItem(session, projectId))}</SidebarMenu>
+    );
 
   return (
     <>
@@ -136,63 +196,48 @@ export function AppSidebar({
                 <p className="px-2 py-2 text-xs text-muted-foreground">暂无项目</p>
               ) : (
                 <SidebarMenu>
-                  {projects.map((project) => (
-                    <SidebarMenuItem key={project.id}>
-                      <SidebarMenuButton
-                        isActive={project.id === activeProjectId}
-                        title={project.rootPath}
-                        onClick={() =>
-                          onSelectProject(
-                            project.id === activeProjectId ? undefined : project.id,
-                          )
+                  {projects.map((project) => {
+                    const open = projectExpanded[project.id] ?? project.id === activeProjectId;
+                    return (
+                      <Collapsible
+                        key={project.id}
+                        open={open}
+                        onOpenChange={(next) =>
+                          setProjectExpanded((prev) => ({ ...prev, [project.id]: next }))
                         }
                       >
-                        <Folder className="text-muted-foreground" />
-                        <span>{project.name}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
+                        <SidebarMenuItem>
+                          <CollapsibleTrigger asChild>
+                            <SidebarMenuButton
+                              isActive={project.id === activeProjectId}
+                              title={project.rootPath}
+                              onClick={() => onSelectProject(project.id)}
+                            >
+                              {open ? (
+                                <ChevronDown className="text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="text-muted-foreground" />
+                              )}
+                              <Folder className="text-muted-foreground" />
+                              <span>{project.name}</span>
+                            </SidebarMenuButton>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="mt-1 ml-4 py-1">
+                              {sessionList(projectSessions.grouped.get(project.id) ?? [], project.id)}
+                            </div>
+                          </CollapsibleContent>
+                        </SidebarMenuItem>
+                      </Collapsible>
+                    );
+                  })}
                 </SidebarMenu>
               )}
             </SidebarGroupContent>
           </CollapsibleGroup>
 
-          <CollapsibleGroup label={activeProject ? activeProject.name : "最近"}>
-            <SidebarGroupContent>
-              {visibleSessions.length === 0 ? (
-                <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-                  {loading ? "加载中..." : "暂无对话"}
-                </p>
-              ) : (
-                <SidebarMenu>
-                  {visibleSessions.map((session) => (
-                    <SidebarMenuItem key={session.id}>
-                      <SidebarMenuButton
-                        isActive={session.id === sessionId}
-                        onClick={() => onSelect(session.id)}
-                        className="h-auto items-start py-1.5"
-                      >
-                        <span className="flex-1">
-                          <span className="block truncate">{session.title}</span>
-                          <small className="block truncate text-xs text-muted-foreground">
-                            {formatSessionTime(session.updatedAt)}
-                          </small>
-                        </span>
-                      </SidebarMenuButton>
-
-                      <SidebarMenuAction
-                        showOnHover
-                        className="top-1/2! -translate-y-1/2 text-muted-foreground hover:text-destructive"
-                        onClick={() => onDelete(session.id)}
-                        title="删除对话"
-                      >
-                        <Trash2 />
-                      </SidebarMenuAction>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              )}
-            </SidebarGroupContent>
+          <CollapsibleGroup label="最近">
+            <SidebarGroupContent>{sessionList(projectSessions.recent)}</SidebarGroupContent>
           </CollapsibleGroup>
         </SidebarContent>
 

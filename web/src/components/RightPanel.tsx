@@ -1,4 +1,5 @@
 import {
+  ArrowLeftIcon,
   BarChart3Icon,
   CheckCircleIcon,
   CircleIcon,
@@ -6,6 +7,7 @@ import {
   GlobeIcon,
   ListTodoIcon,
   LoaderCircleIcon,
+  RefreshCwIcon,
   WrenchIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -17,8 +19,15 @@ import {
 } from "@/components/ai-elements/file-tree";
 import { getStatusBadge, ToolInput } from "@/components/ai-elements/tool";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { listFiles, type AgentTaskInfo, type FileEntry } from "@/api";
+import {
+  listFiles,
+  readFileContent,
+  type AgentTaskInfo,
+  type FileEntry,
+  type ProjectInfo,
+} from "@/api";
 import {
   collectToolCalls,
   collectUsage,
@@ -37,6 +46,7 @@ export interface RightPanelProps {
   selectedToolId?: string;
   onToolSelect: (id: string) => void;
   width: number;
+  project?: ProjectInfo | null;
 }
 
 export function RightPanel({
@@ -47,6 +57,7 @@ export function RightPanel({
   selectedToolId,
   onToolSelect,
   width,
+  project,
 }: RightPanelProps) {
   return (
     <aside
@@ -81,8 +92,8 @@ export function RightPanel({
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
-          <WorkspaceFiles />
+        <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
+          <FileBrowser key={project?.id ?? "workspace"} project={project} />
         </TabsContent>
         <TabsContent value="tasks" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <TaskList tasks={tasks} />
@@ -109,10 +120,18 @@ function EmptyNote({ text }: { text: string }) {
   return <p className="py-10 text-center text-xs text-muted-foreground">{text}</p>;
 }
 
-function WorkspaceFiles() {
+function FileBrowser({ project }: { project?: ProjectInfo | null }) {
+  const rootPath = project?.rootPath ?? "";
+  const rootLabel =
+    project?.name ??
+    rootPath.split(/[\\/]/).filter(Boolean).at(-1) ??
+    "工作区";
+
   const [entries, setEntries] = useState<Record<string, FileEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string>();
+  const [selectedFile, setSelectedFile] = useState<string>();
+  const [reloadToken, setReloadToken] = useState(0);
   const loadedRef = useRef<Set<string>>(new Set());
 
   const load = useCallback((path: string) => {
@@ -124,8 +143,17 @@ function WorkspaceFiles() {
   }, []);
 
   useEffect(() => {
-    load("");
-  }, [load]);
+    load(rootPath);
+  }, [load, rootPath, reloadToken]);
+
+  const refresh = useCallback(() => {
+    loadedRef.current = new Set();
+    setEntries({});
+    setExpanded(new Set());
+    setSelected(undefined);
+    setSelectedFile(undefined);
+    setReloadToken((token) => token + 1);
+  }, []);
 
   const handleExpandedChange = useCallback(
     (next: Set<string>) => {
@@ -135,33 +163,174 @@ function WorkspaceFiles() {
     [load],
   );
 
+  // Workspace mode uses workspace-relative paths ("a/b.txt"); project mode
+  // uses absolute paths rooted at the project folder.
+  const childPath = (dirPath: string, name: string) => {
+    if (!dirPath) return rootPath ? `${rootPath.replaceAll("\\", "/")}/${name}` : name;
+    return `${dirPath.replaceAll("\\", "/")}/${name}`;
+  };
+
+  const isFilePath = useCallback(
+    (path: string) => {
+      for (const [dirPath, list] of Object.entries(entries)) {
+        if (list.some((entry) => entry.isFile && childPath(dirPath, entry.name) === path)) {
+          return true;
+        }
+      }
+      return false;
+    },
+    [entries, rootPath], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const handleSelect = useCallback(
+    (path: string) => {
+      setSelected(path);
+      if (isFilePath(path)) setSelectedFile(path);
+    },
+    [isFilePath],
+  );
+
   const renderDir = (dirPath: string): ReactNode =>
     (entries[dirPath] ?? []).map((entry) => {
-      const childPath = dirPath ? `${dirPath}/${entry.name}` : entry.name;
+      const path = childPath(dirPath, entry.name);
       return entry.isDirectory ? (
-        <FileTreeFolder key={childPath} path={childPath} name={entry.name}>
-          {expanded.has(childPath) ? renderDir(childPath) : null}
+        <FileTreeFolder key={path} path={path} name={entry.name}>
+          {expanded.has(path) ? renderDir(path) : null}
         </FileTreeFolder>
       ) : (
-        <FileTreeFile key={childPath} path={childPath} name={entry.name} />
+        <FileTreeFile key={path} path={path} name={entry.name} />
       );
     });
 
-  const rootLoaded = "" in entries;
+  const rootLoaded = rootPath in entries;
+
+  if (selectedFile) {
+    return (
+      <FileContentView
+        filePath={selectedFile}
+        rootPath={rootPath}
+        onBack={() => setSelectedFile(undefined)}
+      />
+    );
+  }
 
   return (
-    <FileTree
-      expanded={expanded}
-      onExpandedChange={handleExpandedChange}
-      selectedPath={selected}
-      onSelect={setSelected}
-      className="rounded-none border-0"
-    >
-      {rootLoaded ? renderDir("") : <EmptyNote text="正在加载工作区…" />}
-      {rootLoaded && (entries[""] ?? []).length === 0 ? (
-        <EmptyNote text="工作区为空。" />
-      ) : null}
-    </FileTree>
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+          <FolderOpenIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="truncate">{rootLabel}</span>
+        </p>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 shrink-0"
+          onClick={refresh}
+          title="刷新"
+        >
+          <RefreshCwIcon className="size-3.5" />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <FileTree
+          expanded={expanded}
+          onExpandedChange={handleExpandedChange}
+          selectedPath={selected}
+          onSelect={handleSelect}
+          className="rounded-none border-0"
+        >
+          {rootLoaded ? (
+            renderDir(rootPath)
+          ) : (
+            <EmptyNote text={project ? "正在加载项目文件…" : "正在加载工作区…"} />
+          )}
+          {rootLoaded && (entries[rootPath] ?? []).length === 0 ? (
+            <EmptyNote text="文件夹为空。" />
+          ) : null}
+        </FileTree>
+      </div>
+    </div>
+  );
+}
+
+const EXTENSION_LANGUAGE: Record<string, string> = {
+  ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", mjs: "javascript",
+  cjs: "javascript", json: "json", jsonc: "json", rs: "rust", py: "python",
+  go: "go", java: "java", kt: "kotlin", c: "c", h: "c", cpp: "cpp", cc: "cpp",
+  hpp: "cpp", cs: "csharp", rb: "ruby", php: "php", swift: "swift",
+  sh: "bash", bash: "bash", zsh: "bash", ps1: "powershell", sql: "sql",
+  html: "html", htm: "html", css: "css", scss: "scss", vue: "vue",
+  yml: "yaml", yaml: "yaml", toml: "toml", md: "markdown", mdx: "markdown",
+  xml: "xml", dockerfile: "dockerfile", prisma: "prisma", graphql: "graphql",
+  gql: "graphql", ini: "ini", lua: "lua", zig: "zig",
+};
+
+function languageForFile(filePath: string): string {
+  const name = filePath.split("/").at(-1) ?? "";
+  if (name.toLowerCase() === "dockerfile") return "dockerfile";
+  const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
+  return EXTENSION_LANGUAGE[extension] ?? "text";
+}
+
+function FileContentView({
+  filePath,
+  rootPath,
+  onBack,
+}: {
+  filePath: string;
+  rootPath: string;
+  onBack: () => void;
+}) {
+  const [content, setContent] = useState<string>();
+  const [error, setError] = useState<string>();
+  const rootPrefix = rootPath ? `${rootPath.replaceAll("\\", "/")}/` : "";
+  const relativePath = rootPrefix && filePath.startsWith(rootPrefix)
+    ? filePath.slice(rootPrefix.length)
+    : filePath;
+
+  useEffect(() => {
+    setContent(undefined);
+    setError(undefined);
+    let cancelled = false;
+    readFileContent(filePath)
+      .then((file) => {
+        if (!cancelled) setContent(file.content);
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : "读取文件失败");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath]);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={onBack} title="返回文件树">
+          <ArrowLeftIcon className="size-3.5" />
+        </Button>
+        <p className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={filePath}>
+          {relativePath || filePath}
+        </p>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted/30">
+        {error ? (
+          <EmptyNote text={error} />
+        ) : content === undefined ? (
+          <EmptyNote text="正在加载文件…" />
+        ) : (
+          <CodeBlock
+            code={content}
+            language={languageForFile(filePath) as never}
+            showLineNumbers
+            className="rounded-none border-0 bg-transparent"
+          />
+        )}
+      </div>
+    </div>
   );
 }
 

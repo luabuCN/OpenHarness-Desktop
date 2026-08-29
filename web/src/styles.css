@@ -180,3 +180,15 @@
     background: transparent;
   }
 }
+
+/* 侧边栏会话标题：悬停时超长文本来回滚动（marquee） */
+@keyframes session-title-scroll {
+  0%,
+  20% {
+    transform: translateX(0);
+  }
+  80%,
+  100% {
+    transform: translateX(var(--scroll-distance, 0));
+  }
+}
