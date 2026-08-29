@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Bot, Cloud, FolderOpen, ShieldCheck, Wrench } from "lucide-react";
+import { ArrowLeft, Bot, Cloud, FolderOpen, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -7,11 +7,10 @@ import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import { cn } from "@/lib/utils";
 import { ProvidersSection } from "./ProvidersSection";
 import { AgentsSection } from "./AgentsSection";
-import { PermissionsSection } from "./PermissionsSection";
 import { ProjectsSection } from "./ProjectsSection";
 import { ToolsSection } from "./ToolsSection";
 
-type SettingsSectionKey = "projects" | "agents" | "models" | "tools" | "permissions";
+type SettingsSectionKey = "projects" | "agents" | "models" | "tools";
 
 const NAV_ITEMS: {
   key: SettingsSectionKey;
@@ -22,7 +21,6 @@ const NAV_ITEMS: {
   { key: "agents", label: "Agent", icon: Bot },
   { key: "models", label: "模型", icon: Cloud },
   { key: "tools", label: "工具", icon: Wrench },
-  { key: "permissions", label: "权限", icon: ShieldCheck },
 ];
 
 interface SettingsPageProps {
@@ -35,7 +33,7 @@ export function SettingsPage({ onExit, onChanged }: SettingsPageProps) {
   const active = NAV_ITEMS.find((item) => item.key === section) ?? NAV_ITEMS[0];
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col bg-background">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <header className="flex h-11 shrink-0 items-center gap-3 border-b px-4">
         <SidebarPeekTrigger />
         <Button variant="ghost" size="icon-sm" onClick={onExit} title="返回">
@@ -73,7 +71,6 @@ export function SettingsPage({ onExit, onChanged }: SettingsPageProps) {
           {section === "agents" ? <AgentsSection onChanged={onChanged} /> : null}
           {section === "models" ? <ProvidersSection onChanged={onChanged} /> : null}
           {section === "tools" ? <ToolsSection /> : null}
-          {section === "permissions" ? <PermissionsSection onChanged={onChanged} /> : null}
         </div>
       </div>
     </section>

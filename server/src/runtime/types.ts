@@ -6,6 +6,14 @@ export function isThinkingMode(value: unknown): value is ThinkingMode {
   return typeof value === "string" && THINKING_MODES.includes(value as ThinkingMode);
 }
 
+export const PERMISSION_MODES = ["confirm", "auto_edit", "full"] as const;
+
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export function isPermissionMode(value: unknown): value is PermissionMode {
+  return typeof value === "string" && PERMISSION_MODES.includes(value as PermissionMode);
+}
+
 export interface AgentProfile {
   id: ThinkingMode;
   label: string;

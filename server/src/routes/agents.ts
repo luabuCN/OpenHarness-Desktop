@@ -5,24 +5,17 @@ import { TOOL_CATALOG } from "../runtime/tool-catalog.js";
 
 export const agentRoutes = new Hono();
 
-const toolPolicySchema = z.object({
-  enabled: z.boolean().optional(),
-  requireApproval: z.boolean().optional(),
-});
-
 const subAgentSchema = z.object({
   id: z.string().trim().min(1).max(64),
   name: z.string().trim().min(1).max(100),
   description: z.string().trim().min(1).max(500),
   instructions: z.string().trim().min(1).max(20_000),
-  toolPermissions: z.record(z.string(), toolPolicySchema).optional(),
 });
 
 const createAgentSchema = z.object({
   name: z.string().trim().min(1).max(100),
   description: z.string().trim().min(1).max(500),
   instructions: z.string().trim().min(1).max(50_000),
-  toolPermissions: z.record(z.string(), toolPolicySchema).optional(),
   subAgents: z.array(subAgentSchema).max(10).optional(),
   defaultProviderId: z.string().trim().min(1).nullable().optional(),
   defaultModelId: z.string().trim().min(1).nullable().optional(),

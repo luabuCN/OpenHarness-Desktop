@@ -18,6 +18,14 @@ export interface HealthInfo {
 
 export type ThinkingMode = "fast" | "deep";
 
+export const PERMISSION_MODES = ["confirm", "auto_edit", "full"] as const;
+
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export function isPermissionMode(value: unknown): value is PermissionMode {
+  return typeof value === "string" && PERMISSION_MODES.includes(value as PermissionMode);
+}
+
 export interface FileEntry {
   name: string;
   isFile: boolean;
@@ -153,12 +161,10 @@ export interface ModelSelection {
   modelId: string;
 }
 
-export interface ToolPolicy {
+export type ToolPolicy = {
   enabled: boolean;
   requireApproval: boolean;
-}
-
-export type ToolPermissionMap = Record<string, ToolPolicy>;
+};
 
 export interface ToolCatalogInfo {
   name: string;
@@ -174,7 +180,7 @@ export interface SubAgentInfo {
   name: string;
   description: string;
   instructions: string;
-  toolPermissions: ToolPermissionMap;
+  readOnly: boolean;
 }
 
 export interface AgentInfo {
@@ -182,7 +188,7 @@ export interface AgentInfo {
   name: string;
   description: string;
   instructions: string;
-  toolPermissions: ToolPermissionMap;
+  readOnly: boolean;
   subAgents: SubAgentInfo[];
   defaultProviderId?: string | null;
   defaultModelId?: string | null;
@@ -196,7 +202,6 @@ export interface AgentInput {
   name?: string;
   description?: string;
   instructions?: string;
-  toolPermissions?: ToolPermissionMap;
   subAgents?: SubAgentInfo[];
   defaultProviderId?: string | null;
   defaultModelId?: string | null;
@@ -285,10 +290,12 @@ export function listConversationTasks(conversationId: string): Promise<AgentTask
     .then((data) => data.tasks);
 }
 
+export type ApprovalAction = "approve" | "approve_always" | "reject";
+
 export function decideApproval(
   runId: string,
   approvalId: string,
-  action: "approve" | "reject",
+  action: ApprovalAction,
 ): Promise<void> {
   return apiFetch(`/api/runs/${runId}/approvals/${approvalId}`, {
     method: "POST",

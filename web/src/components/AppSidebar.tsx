@@ -72,7 +72,7 @@ function CollapsibleGroup({
 }) {
   return (
     <Collapsible defaultOpen className="group/collapsible">
-      <SidebarGroup>
+      <SidebarGroup className="py-1">
         <SidebarGroupLabel asChild>
           <CollapsibleTrigger className="w-full cursor-pointer">
             <span className="min-w-0 truncate">{label}</span>
@@ -129,7 +129,7 @@ export function AppSidebar({
           </SidebarMenu>
         </SidebarHeader>
 
-        <SidebarContent>
+        <SidebarContent className="gap-0">
           <CollapsibleGroup label="项目">
             <SidebarGroupContent>
               {projects.length === 0 ? (

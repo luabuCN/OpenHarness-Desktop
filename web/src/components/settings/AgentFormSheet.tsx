@@ -193,7 +193,7 @@ export function AgentFormSheet({
                 onChange={(event) => setSubAgentsText(event.target.value)}
               />
               <FieldDescription>
-                JSON 数组；每个子 Agent 包含 id、name、description、instructions 和 toolPermissions。
+                JSON 数组；每个子 Agent 包含 id、name、description 和 instructions。
               </FieldDescription>
             </Field>
             <Field orientation="horizontal">

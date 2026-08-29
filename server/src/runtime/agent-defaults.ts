@@ -1,11 +1,9 @@
-import { defaultToolPermissions, type ToolPermissionMap } from "./tool-catalog.js";
-
 export interface SubAgentConfig {
   id: string;
   name: string;
   description: string;
   instructions: string;
-  toolPermissions: ToolPermissionMap;
+  readOnly: boolean;
 }
 
 export interface BuiltInAgent {
@@ -13,7 +11,7 @@ export interface BuiltInAgent {
   name: string;
   description: string;
   instructions: string;
-  toolPermissions: ToolPermissionMap;
+  readOnly: boolean;
   subAgents: SubAgentConfig[];
 }
 
@@ -34,7 +32,7 @@ const exploreSubAgent: SubAgentConfig = {
   description: "只读工作区探索。",
   instructions:
     "You explore the local workspace, read files, and report concise findings. You cannot modify files.",
-  toolPermissions: defaultToolPermissions({ readOnly: true }),
+  readOnly: true,
 };
 
 export const BUILT_IN_AGENTS: BuiltInAgent[] = [
@@ -43,7 +41,7 @@ export const BUILT_IN_AGENTS: BuiltInAgent[] = [
     name: "默认 Agent",
     description: "通用本地工作区助手，拥有完整工具集。",
     instructions: baseInstructions,
-    toolPermissions: defaultToolPermissions(),
+    readOnly: false,
     subAgents: [exploreSubAgent],
   },
   {
@@ -53,7 +51,7 @@ export const BUILT_IN_AGENTS: BuiltInAgent[] = [
       "只读探索专家。查找文件、搜索代码并汇报结果，不做任何修改。",
     instructions:
       `${baseInstructions} You are read-only: explore the workspace, read files, and search code, then report concise findings. Never modify files or run mutating commands.`,
-    toolPermissions: defaultToolPermissions({ readOnly: true }),
+    readOnly: true,
     subAgents: [],
   },
   {
@@ -62,7 +60,7 @@ export const BUILT_IN_AGENTS: BuiltInAgent[] = [
     description: "专注于实现并验证代码变更的执行专家。",
     instructions:
       `${baseInstructions} You focus on implementing the requested change end to end: locate the right files, make the edits, and verify with tests or builds when available.`,
-    toolPermissions: defaultToolPermissions(),
+    readOnly: false,
     subAgents: [exploreSubAgent],
   },
 ];
@@ -70,7 +68,8 @@ export const BUILT_IN_AGENTS: BuiltInAgent[] = [
 export function builtInAgentRows() {
   return BUILT_IN_AGENTS.map((agent) => ({
     ...agent,
-    toolPermissions: JSON.stringify(agent.toolPermissions),
+    // The legacy column stays NOT NULL; per-agent permissions are no longer used.
+    toolPermissions: "{}",
     subAgents: JSON.stringify(agent.subAgents),
   }));
 }

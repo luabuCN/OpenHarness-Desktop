@@ -151,11 +151,19 @@
     @apply border-border outline-ring/50;
   }
 
+  /* 桌面应用：文档本身永远不滚动（WebView2 缩放或小窗口下
+     曾因 body 的 min-width/min-height 撑出双向滚动），
+     所有滚动都发生在应用内部的容器里。 */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    min-width: 780px;
-    min-height: 560px;
   }
 
   ::-webkit-scrollbar {

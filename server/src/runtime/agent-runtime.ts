@@ -17,7 +17,12 @@ import { agentConfigService, type SubAgentConfig } from "./agents.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
 import { createToolRegistry, type ApprovalBridge } from "./tools.js";
-import { THINKING_MODES, type ThinkingMode } from "./types.js";
+import {
+  parseToolPermissionMap,
+  resolveToolPermissions,
+  type ToolPermissionMap,
+} from "./tool-catalog.js";
+import { THINKING_MODES, type PermissionMode, type ThinkingMode } from "./types.js";
 
 export interface ConversationRunContext {
   conversationId: string;
@@ -40,6 +45,7 @@ async function projectDefaults(projectId?: string) {
       defaultAgentId: true,
       defaultProviderId: true,
       defaultModelId: true,
+      toolPermissions: true,
     },
   });
   if (!project?.isActive) throw new Error("项目不存在或已被停用");
@@ -54,7 +60,8 @@ class AgentRuntimeService {
     context: ConversationRunContext,
     selection?: ModelSelection,
     requestedAgentId?: string,
-) {
+    permissionMode: PermissionMode = "confirm",
+  ) {
     const project = await projectDefaults(context.projectId);
     const definition = await agentConfigService.resolve(
       requestedAgentId ?? project?.defaultAgentId ?? undefined,
@@ -80,15 +87,24 @@ class AgentRuntimeService {
       messages,
       projectId: context.projectId,
       thinkingMode: mode,
+      permissionMode,
       selection: effectiveSelection,
       agentId: definition.id,
     });
     const activeRun = runService.registerAbortSource(run.id, requestSignal);
 
     try {
+      // Global permission mode sets the baseline; read-only agents cannot mutate;
+      // project grants from "always allow" win last.
+      const projectOverrides = parseToolPermissionMap(project?.toolPermissions);
+      const toolPermissions = resolveToolPermissions({
+        mode: permissionMode,
+        readOnly: definition.readOnly,
+        projectOverrides,
+      });
       const tools = createToolRegistry({
         rootPath,
-        toolPermissions: definition.toolPermissions,
+        toolPermissions,
         approvals: activeRun.approvals,
         taskContext: {
           conversationId: context.conversationId,
@@ -98,7 +114,7 @@ class AgentRuntimeService {
       const maxSteps = mode === "deep" ? 120 : 80;
 
       const subAgents = definition.subAgents.map((entry) =>
-        createSubAgent(entry, model, rootPath, activeRun.approvals),
+        createSubAgent(entry, model, rootPath, activeRun.approvals, permissionMode, projectOverrides),
       );
 
       const agent = new Agent({
@@ -225,8 +241,10 @@ class AgentRuntimeService {
 function createSubAgent(
   config: SubAgentConfig,
   model: ChatModel,
-  rootPath?: string,
-  approvals?: ApprovalBridge,
+  rootPath: string | undefined,
+  approvals: ApprovalBridge | undefined,
+  permissionMode: PermissionMode,
+  projectOverrides: ToolPermissionMap,
 ) {
   return new Agent({
     id: config.id,
@@ -236,7 +254,11 @@ function createSubAgent(
     model,
     tools: createToolRegistry({
       rootPath,
-      toolPermissions: config.toolPermissions,
+      toolPermissions: resolveToolPermissions({
+        mode: permissionMode,
+        readOnly: config.readOnly,
+        projectOverrides,
+      }),
       approvals,
     }).toToolSet(),
     defaultOptions: { maxSteps: 15 },

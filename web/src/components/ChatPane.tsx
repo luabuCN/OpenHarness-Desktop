@@ -6,8 +6,6 @@ import {
   LoaderCircleIcon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
-  ShieldAlertIcon,
-  XIcon,
 } from "lucide-react";
 import {
   Conversation,
@@ -38,8 +36,10 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
 import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import type {
+  ApprovalAction,
   ApprovalInfo,
   ModelSelection,
+  PermissionMode,
   ProjectInfo,
   ProviderInfo,
   RunInfo,
@@ -49,6 +49,8 @@ import { MessageView } from "./MessageView";
 import { ModelSelector } from "./ModelSelector";
 import { AgentSelector } from "./AgentSelector";
 import { ProjectSelector } from "./ProjectSelector";
+import { ApprovalPrompt } from "./ApprovalPrompt";
+import { PermissionModeSelector } from "./PermissionModeSelector";
 
 const SUGGESTIONS = [
   "列出工作区中的文件",
@@ -64,6 +66,8 @@ export interface ChatPaneProps {
   onSelectionChange: (selection: ModelSelection) => void;
   thinkingMode: ThinkingMode;
   onThinkingModeChange: (mode: ThinkingMode) => void;
+  permissionMode: PermissionMode;
+  onPermissionModeChange: (mode: PermissionMode) => void;
   agentId?: string;
   onAgentChange: (agentId: string) => void;
   selectedToolId?: string;
@@ -78,7 +82,7 @@ export interface ChatPaneProps {
   onApprovalDecision: (
     runId: string,
     approvalId: string,
-    action: "approve" | "reject",
+    action: ApprovalAction,
   ) => void;
 }
 
@@ -90,6 +94,8 @@ export function ChatPane({
   onSelectionChange,
   thinkingMode,
   onThinkingModeChange,
+  permissionMode,
+  onPermissionModeChange,
   agentId,
   onAgentChange,
   selectedToolId,
@@ -115,6 +121,11 @@ export function ChatPane({
       : typeof chat.error === "string"
         ? chat.error
         : undefined;
+  // 一次只确认一条：按创建时间取最早的一条，其余等这条处理完再依次出现。
+  const sortedApprovals = [...pendingApprovals].sort((a, b) =>
+    a.approval.createdAt.localeCompare(b.approval.createdAt),
+  );
+  const activeApproval = sortedApprovals[0];
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
@@ -137,50 +148,6 @@ export function ChatPane({
           )}
         </Button>
       </header>
-
-      {pendingApprovals.length > 0 ? (
-        <div className="mx-auto w-full max-w-3xl shrink-0 px-4">
-          <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm shadow-sm">
-            <div className="flex min-w-0 items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
-              <ShieldAlertIcon className="size-4 shrink-0" />
-              <span>操作等待审批</span>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                待处理 {pendingApprovals.length} 项
-              </span>
-            </div>
-            {pendingApprovals.map(({ run, approval }) => (
-              <div
-                key={approval.id}
-                className="rounded-md border bg-background/80 p-2"
-              >
-                <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">
-                  {approval.input}
-                </pre>
-                <div className="mt-2 flex flex-wrap justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      onApprovalDecision(run.id, approval.id, "reject")
-                    }
-                  >
-                    <XIcon className="size-3.5" />
-                    拒绝
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      onApprovalDecision(run.id, approval.id, "approve")
-                    }
-                  >
-                    同意执行
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       <Conversation>
         <ConversationContent className="mx-auto w-full max-w-3xl gap-6 py-6">
@@ -218,16 +185,33 @@ export function ChatPane({
       </Conversation>
 
       <div className="shrink-0 px-4 pb-4">
-        <div className="relative mx-auto w-full max-w-3xl">
-          <div className="absolute -top-10 left-0 z-10 flex h-8 items-center">
-            <AgentSelector value={agentId} onChange={onAgentChange} />
-            <ProjectSelector
-              projects={projects}
-              projectId={projectId}
-              onSelectProject={onProjectChange}
-              onChanged={onProjectCreated}
-            />
-          </div>
+        <div className="mx-auto w-full max-w-3xl">
+          {activeApproval ? (
+            <div className="mb-12">
+              <ApprovalPrompt
+                run={activeApproval.run}
+                approval={activeApproval.approval}
+                remainingCount={sortedApprovals.length - 1}
+                onDecision={(action) =>
+                  onApprovalDecision(
+                    activeApproval.run.id,
+                    activeApproval.approval.id,
+                    action,
+                  )
+                }
+              />
+            </div>
+          ) : null}
+          <div className="relative">
+            <div className="absolute -top-10 left-0 z-10 flex h-8 items-center">
+              <AgentSelector value={agentId} onChange={onAgentChange} />
+              <ProjectSelector
+                projects={projects}
+                projectId={projectId}
+                onSelectProject={onProjectChange}
+                onChanged={onProjectCreated}
+              />
+            </div>
           <PromptInput
             className="w-full rounded-xl border bg-card shadow-sm"
             onSubmit={({ text, files }) => {
@@ -245,6 +229,10 @@ export function ChatPane({
             </PromptInputBody>
             <PromptInputFooter>
               <PromptInputTools>
+                <PermissionModeSelector
+                  value={permissionMode}
+                  onChange={onPermissionModeChange}
+                />
                 <PromptInputActionMenu>
                   <PromptInputActionMenuTrigger tooltip="添加附件" />
                   <PromptInputActionMenuContent>
@@ -280,6 +268,7 @@ export function ChatPane({
               />
             </PromptInputFooter>
           </PromptInput>
+          </div>
         </div>
       </div>
     </section>

@@ -1,18 +1,12 @@
 import { prisma } from "../db.js";
-import { BUILT_IN_AGENTS, DEFAULT_AGENT_ID } from "./agent-defaults.js";
-import {
-  TOOL_CATALOG,
-  defaultToolPermissions,
-  type ToolPermissionMap,
-  type ToolPolicy,
-} from "./tool-catalog.js";
+import { DEFAULT_AGENT_ID } from "./agent-defaults.js";
 
 export interface SubAgentConfig {
   id: string;
   name: string;
   description: string;
   instructions: string;
-  toolPermissions: ToolPermissionMap;
+  readOnly: boolean;
 }
 
 export interface AgentConfig {
@@ -20,7 +14,7 @@ export interface AgentConfig {
   name: string;
   description: string;
   instructions: string;
-  toolPermissions: ToolPermissionMap;
+  readOnly: boolean;
   subAgents: SubAgentConfig[];
   defaultProviderId?: string | null;
   defaultModelId?: string | null;
@@ -34,7 +28,6 @@ export interface AgentConfigInput {
   name?: string;
   description?: string;
   instructions?: string;
-  toolPermissions?: ToolPermissionMap;
   subAgents?: SubAgentConfig[];
   defaultProviderId?: string | null;
   defaultModelId?: string | null;
@@ -42,8 +35,6 @@ export interface AgentConfigInput {
 }
 
 type AgentRecord = Awaited<ReturnType<typeof prisma.agentConfig.findFirstOrThrow>>;
-
-const knownToolNames = new Set<string>(TOOL_CATALOG.map((tool) => tool.name));
 
 function parseJsonArray(value: string | null): unknown[] {
   try {
@@ -70,16 +61,6 @@ function parseProviderModels(value: string | null): Array<{ id: string; enabled:
     }));
 }
 
-function parsePermissions(value: string, fallback: ToolPermissionMap): ToolPermissionMap {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (typeof parsed !== "object" || parsed === null) return fallback;
-    return normalizePermissions(parsed as Record<string, unknown>, fallback, "agent");
-  } catch {
-    return fallback;
-  }
-}
-
 function parseSubAgents(value: string): SubAgentConfig[] {
   return parseJsonArray(value)
     .map((entry, index) => {
@@ -88,19 +69,12 @@ function parseSubAgents(value: string): SubAgentConfig[] {
       }
       const raw = entry as Record<string, unknown>;
       const id = typeof raw.id === "string" ? raw.id : "";
-      const fallback = BUILT_IN_AGENTS[0].subAgents[0]?.toolPermissions ?? defaultToolPermissions({ readOnly: true });
       return {
         id,
         name: typeof raw.name === "string" ? raw.name : id,
         description: typeof raw.description === "string" ? raw.description : "",
         instructions: typeof raw.instructions === "string" ? raw.instructions : "",
-        toolPermissions: normalizePermissions(
-          typeof raw.toolPermissions === "object" && raw.toolPermissions !== null
-            ? (raw.toolPermissions as Record<string, unknown>)
-            : undefined,
-          fallback,
-          `sub agent ${id || index + 1}`,
-        ),
+        readOnly: raw.readOnly === true,
       };
     })
     .filter((entry) => entry.id);
@@ -108,46 +82,19 @@ function parseSubAgents(value: string): SubAgentConfig[] {
 
 function serializeAgent(agent: AgentRecord): AgentConfig {
   return {
-    ...agent,
-    toolPermissions: parsePermissions(agent.toolPermissions, defaultToolPermissions()),
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    instructions: agent.instructions,
+    readOnly: agent.readOnly,
     subAgents: parseSubAgents(agent.subAgents),
+    defaultProviderId: agent.defaultProviderId,
+    defaultModelId: agent.defaultModelId,
+    isActive: agent.isActive,
+    isBuiltIn: agent.isBuiltIn,
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
   };
-}
-
-function normalizePermissions(
-  input: Record<string, unknown> | undefined,
-  base: ToolPermissionMap,
-  context: string,
-): ToolPermissionMap {
-  const result = { ...base };
-  if (!input) return result;
-
-  for (const [name, rawPolicy] of Object.entries(input)) {
-    if (!knownToolNames.has(name)) {
-      throw new Error(`${context} 包含未知工具：${name}`);
-    }
-    if (typeof rawPolicy !== "object" || rawPolicy === null) {
-      throw new Error(`${context} 的 ${name} 权限无效`);
-    }
-    const raw = rawPolicy as Record<string, unknown>;
-    const policy: Partial<ToolPolicy> = {};
-    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
-      throw new Error(`${context} 的 ${name}.enabled 必须是布尔值`);
-    }
-    if (raw.requireApproval !== undefined && typeof raw.requireApproval !== "boolean") {
-      throw new Error(`${context} 的 ${name}.requireApproval 必须是布尔值`);
-    }
-    if (typeof raw.enabled === "boolean") policy.enabled = raw.enabled;
-    if (typeof raw.requireApproval === "boolean") policy.requireApproval = raw.requireApproval;
-    result[name] = {
-      enabled: policy.enabled ?? base[name]?.enabled ?? false,
-      requireApproval:
-        policy.requireApproval ?? base[name]?.requireApproval ?? false,
-    };
-  }
-  return result;
 }
 
 function normalizeSubAgents(input: SubAgentConfig[] | undefined): SubAgentConfig[] {
@@ -155,7 +102,6 @@ function normalizeSubAgents(input: SubAgentConfig[] | undefined): SubAgentConfig
   if (input.length > 10) throw new Error("每个 Agent 最多配置 10 个子 Agent");
 
   const ids = new Set<string>();
-  const fallback = defaultToolPermissions({ readOnly: true });
   return input.map((entry, index) => {
     const id = entry.id?.trim() ?? "";
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
@@ -169,7 +115,7 @@ function normalizeSubAgents(input: SubAgentConfig[] | undefined): SubAgentConfig
       name: entry.name?.trim() || id,
       description: entry.description?.trim() || "Configured sub agent.",
       instructions: entry.instructions?.trim() || "Complete the requested specialist task.",
-      toolPermissions: normalizePermissions(entry.toolPermissions, fallback, `子 Agent ${id}`),
+      readOnly: false,
     };
   });
 }
@@ -199,12 +145,6 @@ async function validateModelSelection(
 }
 
 async function upsertData(input: AgentConfigInput, current?: AgentRecord) {
-  const base = current
-    ? parsePermissions(current.toolPermissions, defaultToolPermissions())
-    : defaultToolPermissions();
-  const selected = input.toolPermissions
-    ? normalizePermissions(input.toolPermissions, base, "Agent")
-    : base;
   const oldSubAgents = current ? parseSubAgents(current.subAgents) : [];
   const nextSubAgents =
     input.subAgents === undefined
@@ -226,7 +166,6 @@ async function upsertData(input: AgentConfigInput, current?: AgentRecord) {
     ...(input.description !== undefined ? { description: input.description.trim() } : {}),
     ...(input.instructions !== undefined ? { instructions: input.instructions.trim() } : {}),
     ...(input.isActive !== undefined ? { isActive: input.isActive } : current ? {} : { isActive: true }),
-    toolPermissions: JSON.stringify(selected),
     subAgents: JSON.stringify(nextSubAgents),
     defaultProviderId: providerId,
     defaultModelId: modelId,
@@ -277,6 +216,8 @@ class AgentConfigService {
         description: input.description.trim(),
         instructions: input.instructions.trim(),
         isActive: input.isActive ?? true,
+        // Legacy column kept NOT NULL; permissions are now decided by the global mode.
+        toolPermissions: "{}",
         ...(await upsertData(input)),
       },
     });

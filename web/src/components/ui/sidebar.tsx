@@ -27,10 +27,23 @@ import {
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
-const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
+const SIDEBAR_DEFAULT_WIDTH = 240
+const SIDEBAR_MIN_WIDTH = 200
+const SIDEBAR_MAX_WIDTH = 480
+const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar_width"
+
+// 上限同时受视口约束，避免窄窗口下拖出超出屏幕的宽度。
+function clampSidebarWidth(width: number) {
+  const viewportMax = Math.min(
+    SIDEBAR_MAX_WIDTH,
+    Math.floor(window.innerWidth * 0.6)
+  )
+  const max = Math.max(SIDEBAR_MIN_WIDTH, viewportMax)
+  return Math.round(Math.min(Math.max(width, SIDEBAR_MIN_WIDTH), max))
+}
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -40,8 +53,9 @@ type SidebarContextProps = {
   setOpenMobile: (open: boolean) => void
   isMobile: boolean
   toggleSidebar: () => void
-  previewOpen: boolean
-  setPreviewOpen: (open: boolean) => void
+  sidebarWidth: number
+  setSidebarWidth: (width: number) => void
+  setResizing: (resizing: boolean) => void
 }
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
@@ -70,8 +84,21 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
-  // 悬停预览：侧边栏折叠时，临时以浮层形式弹出，不改变布局。
-  const [previewOpen, setPreviewOpen] = React.useState(false)
+  // 可拖拽调整的侧边栏宽度，单位 px，持久化到 localStorage。
+  const [sidebarWidth, _setSidebarWidth] = React.useState(() => {
+    const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY))
+    return Number.isFinite(stored) && stored > 0
+      ? clampSidebarWidth(stored)
+      : SIDEBAR_DEFAULT_WIDTH
+  })
+  const setSidebarWidth = React.useCallback((width: number) => {
+    _setSidebarWidth(clampSidebarWidth(width))
+  }, [])
+  const [resizing, setResizing] = React.useState(false)
+
+  React.useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
+  }, [sidebarWidth])
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -117,11 +144,6 @@ function SidebarProvider({
   // This makes it easier to style the sidebar with Tailwind classes.
   const state = open ? "expanded" : "collapsed"
 
-  // 侧边栏被固定展开后，悬停预览状态随之失效。
-  React.useEffect(() => {
-    if (open) setPreviewOpen(false)
-  }, [open])
-
   const contextValue = React.useMemo<SidebarContextProps>(
     () => ({
       state,
@@ -131,10 +153,21 @@ function SidebarProvider({
       openMobile,
       setOpenMobile,
       toggleSidebar,
-      previewOpen,
-      setPreviewOpen,
+      sidebarWidth,
+      setSidebarWidth,
+      setResizing,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar, previewOpen]
+    [
+      state,
+      open,
+      setOpen,
+      isMobile,
+      openMobile,
+      setOpenMobile,
+      toggleSidebar,
+      sidebarWidth,
+      setSidebarWidth,
+    ]
   )
 
   return (
@@ -142,9 +175,10 @@ function SidebarProvider({
       <TooltipProvider delayDuration={0}>
         <div
           data-slot="sidebar-wrapper"
+          data-resizing={resizing || undefined}
           style={
             {
-              "--sidebar-width": SIDEBAR_WIDTH,
+              "--sidebar-width": `${sidebarWidth}px`,
               "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
               ...style,
             } as React.CSSProperties
@@ -174,16 +208,7 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
-  const {
-    isMobile,
-    state,
-    openMobile,
-    setOpenMobile,
-    open,
-    setOpen,
-    previewOpen,
-    setPreviewOpen,
-  } = useSidebar()
+  const { isMobile, state, openMobile, setOpenMobile, open } = useSidebar()
 
   if (collapsible === "none") {
     return (
@@ -232,7 +257,6 @@ function Sidebar({
       data-collapsible={state === "collapsed" ? collapsible : ""}
       data-variant={variant}
       data-side={side}
-      data-preview={previewOpen ? "true" : undefined}
       data-slot="sidebar"
     >
       {/* This is what handles the sidebar gap on desktop */}
@@ -240,6 +264,7 @@ function Sidebar({
         data-slot="sidebar-gap"
         className={cn(
           "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+          "group-data-[resizing=true]/sidebar-wrapper:transition-none",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
@@ -251,27 +276,16 @@ function Sidebar({
         data-slot="sidebar-container"
         className={cn(
           "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+          "group-data-[resizing=true]/sidebar-wrapper:transition-none",
           side === "left"
-            ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] group-data-[preview=true]:left-0!"
-            : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)] group-data-[preview=true]:right-0!",
+            ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
+            : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
           // Adjust the padding for floating and inset variants.
           variant === "floating" || variant === "inset"
             ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
             : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
-          "group-data-[preview=true]:shadow-2xl",
           className
         )}
-        onMouseLeave={() => {
-          // 预览状态下，鼠标移出侧边栏浮层时自动收起。
-          if (previewOpen) setPreviewOpen(false)
-        }}
-        onClick={() => {
-          // 预览浮层内点击后固定展开，方便继续操作。
-          if (previewOpen) {
-            setPreviewOpen(false)
-            setOpen(true)
-          }
-        }}
         {...props}
       >
         <div
@@ -281,6 +295,7 @@ function Sidebar({
         >
           {children}
         </div>
+        {open && <SidebarResizeHandle />}
       </div>
     </div>
   )
@@ -330,6 +345,78 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
         "group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full hover:group-data-[collapsible=offcanvas]:bg-sidebar",
         "[[data-side=left][data-collapsible=offcanvas]_&]:-right-2",
         "[[data-side=right][data-collapsible=offcanvas]_&]:-left-2",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+/**
+ * 贴边的拖拽把手：按住左右拖动调整侧边栏宽度，双击恢复默认宽度。
+ * 视觉上只有悬停/拖拽时显示一条细线，点击收起仍由 SidebarRail 承担。
+ */
+function SidebarResizeHandle({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  const { sidebarWidth, setSidebarWidth, setResizing } = useSidebar()
+  const [dragging, setDragging] = React.useState(false)
+  const dragStart = React.useRef({ x: 0, width: 0 })
+
+  // 拖拽期间禁用文本选择并固定光标，避免划选中正文内容。
+  React.useEffect(() => {
+    if (!dragging) return
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "col-resize"
+    return () => {
+      document.body.style.userSelect = ""
+      document.body.style.cursor = ""
+    }
+  }, [dragging])
+
+  return (
+    <div
+      data-sidebar="resize-handle"
+      data-slot="sidebar-resize-handle"
+      data-dragging={dragging || undefined}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="调整侧边栏宽度"
+      title="拖拽调整宽度，双击恢复默认"
+      onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        dragStart.current = { x: event.clientX, width: sidebarWidth }
+        event.currentTarget.setPointerCapture(event.pointerId)
+        setDragging(true)
+        setResizing(true)
+      }}
+      onPointerMove={(event) => {
+        if (!dragging) return
+        const deltaX = event.clientX - dragStart.current.x
+        const side = event.currentTarget
+          .closest("[data-side]")
+          ?.getAttribute("data-side")
+        setSidebarWidth(
+          dragStart.current.width + (side === "right" ? -deltaX : deltaX)
+        )
+      }}
+      onPointerUp={(event) => {
+        if (!dragging) return
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }
+        setDragging(false)
+        setResizing(false)
+      }}
+      className={cn(
+        "absolute inset-y-0 z-20 w-1.5 cursor-col-resize touch-none",
+        "group-data-[side=left]:right-0 group-data-[side=left]:translate-x-1/2",
+        "group-data-[side=right]:left-0 group-data-[side=right]:-translate-x-1/2",
+        "after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 after:rounded-full after:bg-transparent after:transition-colors",
+        "hover:after:bg-sidebar-border data-[dragging=true]:after:bg-sidebar-border",
         className
       )}
       {...props}
@@ -753,6 +840,7 @@ export {
   SidebarMenuSubItem,
   SidebarProvider,
   SidebarRail,
+  SidebarResizeHandle,
   SidebarSeparator,
   SidebarTrigger,
   useSidebar,

@@ -123,7 +123,7 @@ function FilePartView({ part }: { part: FileUIPart }) {
 
 function ReasoningPartView({ part }: { part: ReasoningUIPart }) {
   return (
-    <Reasoning defaultOpen isStreaming={part.state === "streaming"} className="w-full">
+    <Reasoning isStreaming={part.state === "streaming"} className="w-full">
       <ReasoningTrigger />
       {part.text ? (
         <ReasoningContent>{part.text}</ReasoningContent>

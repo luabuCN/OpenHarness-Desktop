@@ -17,7 +17,7 @@ runRoutes.get("/:id", async (c) => {
 });
 
 const decisionSchema = z.object({
-  action: z.enum(["approve", "reject"]),
+  action: z.enum(["approve", "approve_always", "reject"]),
   decisionBy: z.string().trim().max(80).optional(),
 });
 
@@ -35,11 +35,14 @@ runRoutes.post("/:id/approvals/:approvalId", async (c) => {
   await prisma.toolApproval.update({
     where: { id: approval.id },
     data: {
-      status: input.action === "approve" ? "approved" : "rejected",
+      status: input.action === "reject" ? "rejected" : "approved",
       decisionBy: input.decisionBy ?? "user",
       decidedAt: new Date(),
     },
   });
+  if (input.action === "approve_always") {
+    await runService.allowAlways(c.req.param("id"), approval.toolName);
+  }
   return c.json({ ok: true });
 });
 

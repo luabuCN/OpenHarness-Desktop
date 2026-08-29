@@ -2,6 +2,7 @@ import { prisma } from "../db.js";
 import { sessionRepository } from "../repositories/session-repository.js";
 import type { ChatUIMessage } from "../chat-types.js";
 import type { ModelSelection } from "../providers/provider-service.js";
+import { parseToolPermissionMap } from "./tool-catalog.js";
 import type { ApprovalDecision } from "./tools.js";
 
 export const ACTIVE_RUN_STATUSES = ["queued", "running", "waiting_approval"] as const;
@@ -12,11 +13,13 @@ interface StartRunInput {
   projectId?: string;
   agentId?: string;
   thinkingMode: string;
+  permissionMode: string;
   selection?: ModelSelection;
 }
 
 interface ActiveRunHandle {
   abort(): void;
+  approvals: InteractiveApprovalBridge;
 }
 
 function messageTitle(messages: ChatUIMessage[]): string | undefined {
@@ -36,12 +39,22 @@ function messageTitle(messages: ChatUIMessage[]): string | undefined {
 class InteractiveApprovalBridge {
   private static readonly TIMEOUT_MS = 5 * 60 * 1_000;
 
+  /** Tool names the user chose to always allow; skips new approval records for the rest of the run. */
+  private readonly alwaysAllowed = new Set<string>();
+
   constructor(
     private readonly runId: string,
     private readonly signal?: AbortSignal,
   ) {}
 
+  allowAlways(toolName: string) {
+    this.alwaysAllowed.add(toolName);
+  }
+
   async request(toolName: string, input: string): Promise<ApprovalDecision> {
+    if (this.alwaysAllowed.has(toolName)) {
+      return { kind: "approved" };
+    }
     const approval = await prisma.toolApproval.create({
       data: { runId: this.runId, toolName, input },
     });
@@ -103,6 +116,7 @@ class ThreadRunService {
         conversationId: input.conversationId,
         projectId: input.projectId ?? null,
         thinkingMode: input.thinkingMode,
+        permissionMode: input.permissionMode,
         agentId: input.agentId ?? null,
         providerId: input.selection?.providerId ?? null,
         modelId: input.selection?.modelId ?? null,
@@ -114,8 +128,10 @@ class ThreadRunService {
 
   registerAbortSource(runId: string, externalSignal: AbortSignal) {
     const controller = new AbortController();
+    const approvals = new InteractiveApprovalBridge(runId, controller.signal);
     const handle: ActiveRunHandle = {
       abort: () => controller.abort(),
+      approvals,
     };
     this.activeRuns.set(runId, handle);
 
@@ -127,12 +143,37 @@ class ThreadRunService {
 
     return {
       signal: controller.signal,
-      approvals: new InteractiveApprovalBridge(runId, controller.signal),
+      approvals,
       cleanup: () => {
         externalSignal.removeEventListener("abort", onAbort);
         this.activeRuns.delete(runId);
       },
     };
+  }
+
+  /**
+   * "Always allow" for one tool: suppress further prompts in the current run and,
+   * when the run belongs to a project, persist the grant so later runs skip asking too.
+   */
+  async allowAlways(runId: string, toolName: string) {
+    this.activeRuns.get(runId)?.approvals.allowAlways(toolName);
+
+    const run = await prisma.threadRun.findUnique({
+      where: { id: runId },
+      select: { projectId: true },
+    });
+    if (!run?.projectId) return;
+
+    const project = await prisma.project.findUnique({
+      where: { id: run.projectId },
+      select: { toolPermissions: true },
+    });
+    const permissions = parseToolPermissionMap(project?.toolPermissions);
+    permissions[toolName] = { enabled: true, requireApproval: false };
+    await prisma.project.update({
+      where: { id: run.projectId },
+      data: { toolPermissions: JSON.stringify(permissions) },
+    });
   }
 
   async appendTransition(runId: string, eventType: string, payload: unknown) {

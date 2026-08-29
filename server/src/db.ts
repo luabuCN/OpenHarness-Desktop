@@ -91,6 +91,7 @@ export async function ensureSchema() {
       "projectId" TEXT,
       "agentId" TEXT,
       "thinkingMode" TEXT NOT NULL DEFAULT 'fast',
+      "permissionMode" TEXT NOT NULL DEFAULT 'confirm',
       "providerId" TEXT,
       "modelId" TEXT,
       "status" TEXT NOT NULL DEFAULT 'queued',
@@ -190,6 +191,7 @@ export async function ensureSchema() {
       "description" TEXT NOT NULL,
       "instructions" TEXT NOT NULL,
       "toolPermissions" TEXT NOT NULL,
+      "readOnly" BOOLEAN NOT NULL DEFAULT false,
       "subAgents" TEXT NOT NULL,
       "defaultProviderId" TEXT,
       "defaultModelId" TEXT,
@@ -202,6 +204,15 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE UNIQUE INDEX IF NOT EXISTS "AgentConfig_name_key" ON "AgentConfig" ("name")',
   );
+  await addColumnIfMissing(`
+    ALTER TABLE "AgentConfig" ADD COLUMN "readOnly" BOOLEAN NOT NULL DEFAULT false
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "ThreadRun" ADD COLUMN "permissionMode" TEXT NOT NULL DEFAULT 'confirm'
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "Project" ADD COLUMN "toolPermissions" TEXT
+  `);
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({
       where: { id: agent.id },
@@ -209,7 +220,7 @@ export async function ensureSchema() {
       update: {
         description: agent.description,
         instructions: agent.instructions,
-        toolPermissions: agent.toolPermissions,
+        readOnly: agent.readOnly,
         subAgents: agent.subAgents,
         isBuiltIn: true,
       },

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -10,7 +10,10 @@ import {
   listProjects,
   listProviders,
   decideApproval,
+  isPermissionMode,
+  type ApprovalAction,
   type ModelSelection,
+  type PermissionMode,
   type ProjectInfo,
   type ProviderInfo,
   type RunInfo,
@@ -23,13 +26,13 @@ import { ChatPane } from "./components/ChatPane";
 import { defaultModelSelection } from "./components/ModelSelector";
 import { RightPanel, type RightTab } from "./components/RightPanel";
 import { AppSidebar } from "./components/AppSidebar";
-import { SidebarPeekZone } from "./components/SidebarPeekTrigger";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import type { ChatUIMessage } from "./lib/chat-utils";
 
 const SESSION_KEY = "openharness.sessionId";
 const THINKING_MODE_KEY = "openharness.thinkingMode";
+const PERMISSION_MODE_KEY = "openharness.permissionMode";
 const AGENT_KEY = "openharness.agentId";
 const PROJECT_KEY = "openharness.projectId";
 const PANEL_WIDTH_MIN = 280;
@@ -47,6 +50,8 @@ interface SessionViewProps {
   displaySelection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
   thinkingMode: ThinkingMode;
+  permissionMode: PermissionMode;
+  onPermissionModeChange: (mode: PermissionMode) => void;
   agentId?: string;
   onAgentChange: (agentId: string) => void;
   projectId?: string;
@@ -68,6 +73,8 @@ function SessionView({
   displaySelection,
   onSelectionChange,
   thinkingMode,
+  permissionMode,
+  onPermissionModeChange,
   agentId,
   onAgentChange,
   projectId,
@@ -84,6 +91,7 @@ function SessionView({
   const [selectedToolId, setSelectedToolId] = useState<string>();
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
   const thinkingModeRef = useRef(thinkingMode);
+  const permissionModeRef = useRef(permissionMode);
   const agentIdRef = useRef(agentId);
   const projectIdRef = useRef(projectId);
   const [runs, setRuns] = useState<RunInfo[]>([]);
@@ -92,6 +100,10 @@ function SessionView({
   useEffect(() => {
     thinkingModeRef.current = thinkingMode;
   }, [thinkingMode]);
+
+  useEffect(() => {
+    permissionModeRef.current = permissionMode;
+  }, [permissionMode]);
 
   useEffect(() => {
     agentIdRef.current = agentId;
@@ -119,6 +131,9 @@ function SessionView({
               body?.thinkingMode === "deep" || body?.thinkingMode === "fast"
                 ? body.thinkingMode
                 : thinkingModeRef.current,
+            permissionMode: isPermissionMode(body?.permissionMode)
+              ? body.permissionMode
+              : permissionModeRef.current,
             agentId:
               typeof body?.agentId === "string" && body.agentId
                 ? body.agentId
@@ -195,7 +210,7 @@ function SessionView({
   );
 
   const handleApprovalDecision = useCallback(
-    async (runId: string, approvalId: string, action: "approve" | "reject") => {
+    async (runId: string, approvalId: string, action: ApprovalAction) => {
       await decideApproval(runId, approvalId, action);
       setRuns((current) =>
         current.map((run) =>
@@ -208,7 +223,7 @@ function SessionView({
 
                   return {
                     ...approval,
-                    status: action === "approve" ? "approved" : "rejected",
+                    status: action === "reject" ? "rejected" : "approved",
                   };
                 }),
               },
@@ -269,6 +284,8 @@ function SessionView({
         onSelectionChange={onSelectionChange}
         thinkingMode={thinkingMode}
         onThinkingModeChange={onThinkingModeChange}
+        permissionMode={permissionMode}
+        onPermissionModeChange={onPermissionModeChange}
         agentId={agentId}
         onAgentChange={onAgentChange}
         selectedToolId={selectedToolId}
@@ -320,6 +337,10 @@ export function App() {
   const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(() =>
     localStorage.getItem(THINKING_MODE_KEY) === "deep" ? "deep" : "fast",
   );
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
+    const stored = localStorage.getItem(PERMISSION_MODE_KEY);
+    return isPermissionMode(stored) ? stored : "confirm";
+  });
   const [agentId, setAgentId] = useState<string | undefined>(
     () => localStorage.getItem(AGENT_KEY) ?? undefined,
   );
@@ -414,6 +435,10 @@ export function App() {
   }, [thinkingMode]);
 
   useEffect(() => {
+    localStorage.setItem(PERMISSION_MODE_KEY, permissionMode);
+  }, [permissionMode]);
+
+  useEffect(() => {
     if (agentId) {
       localStorage.setItem(AGENT_KEY, agentId);
     } else {
@@ -495,10 +520,7 @@ export function App() {
   }
 
   return (
-    <SidebarProvider
-      className="h-screen min-w-0 overflow-hidden"
-      style={{ "--sidebar-width": "18rem" } as CSSProperties}
-    >
+    <SidebarProvider className="h-screen min-w-0 overflow-hidden">
       <AppSidebar
         sessions={sessions}
         sessionId={sessionId}
@@ -513,7 +535,6 @@ export function App() {
         onProjectsChanged={refreshProjects}
         onOpenSettings={() => setView("settings")}
       />
-      <SidebarPeekZone />
       <SidebarInset className="min-w-0">
         {view === "settings" ? (
           <SettingsPage
@@ -536,6 +557,8 @@ export function App() {
               onSelectionChange={setModelSelection}
               thinkingMode={thinkingMode}
               onThinkingModeChange={setThinkingMode}
+              permissionMode={permissionMode}
+              onPermissionModeChange={setPermissionMode}
               agentId={agentId}
               onAgentChange={setAgentId}
               projects={projects}

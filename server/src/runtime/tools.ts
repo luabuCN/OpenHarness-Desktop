@@ -9,7 +9,7 @@ import { TOOL_CATALOG, type ToolPermissionMap, type ToolPolicy } from "./tool-ca
 export type RuntimeTool = ToolAction<any, any, any, any, any>;
 
 export type ApprovalDecision =
-  | { kind: "approved"; approvalId: string }
+  | { kind: "approved"; approvalId?: string }
   | { kind: "rejected"; reason?: string }
   | { kind: "timeout" }
   | { kind: "aborted" };
