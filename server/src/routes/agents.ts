@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { agentConfigService, type AgentConfigInput } from "../runtime/agents.js";
-import { TOOL_CATALOG } from "../runtime/tool-catalog.js";
+import { toolRecordService } from "../runtime/tools/index.js";
 
 export const agentRoutes = new Hono();
 
@@ -24,7 +24,9 @@ const createAgentSchema = z.object({
 
 const updateAgentSchema = createAgentSchema.partial();
 
-agentRoutes.get("/tools", (c) => c.json({ tools: TOOL_CATALOG }));
+// Legacy alias of GET /api/tools kept for the settings page; the catalog now
+// comes from the provider registry merged with ToolRecord switch state.
+agentRoutes.get("/tools", async (c) => c.json({ tools: await toolRecordService.listCatalog() }));
 
 agentRoutes.get("/", async (c) => {
   return c.json({ agents: await agentConfigService.list() });

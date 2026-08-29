@@ -10,6 +10,7 @@ import { projectRoutes } from "./routes/projects.js";
 import { runRoutes } from "./routes/runs.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { taskRoutes } from "./routes/tasks.js";
+import { toolRoutes } from "./routes/tools.js";
 
 const allowedOrigins = new Set(
   [
@@ -46,6 +47,7 @@ app.route("/api/sessions", sessionRoutes);
 app.route("/api/providers", providerRoutes);
 app.route("/api/projects", projectRoutes);
 app.route("/api/runs", runRoutes);
+app.route("/api/tools", toolRoutes);
 app.route("/api/conversations", taskRoutes);
 app.route("/api/agents", agentRoutes);
 app.route("/api/chat", chatRoutes);

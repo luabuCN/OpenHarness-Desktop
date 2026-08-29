@@ -213,6 +213,23 @@ export async function ensureSchema() {
   await addColumnIfMissing(`
     ALTER TABLE "Project" ADD COLUMN "toolPermissions" TEXT
   `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "ToolRecord" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "label" TEXT NOT NULL,
+      "description" TEXT NOT NULL,
+      "risk" TEXT NOT NULL DEFAULT 'medium',
+      "mutating" BOOLEAN NOT NULL DEFAULT false,
+      "providerId" TEXT NOT NULL DEFAULT 'builtin',
+      "isActive" BOOLEAN NOT NULL DEFAULT true,
+      "config" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "ToolRecord_providerId_idx" ON "ToolRecord" ("providerId")',
+  );
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({
       where: { id: agent.id },

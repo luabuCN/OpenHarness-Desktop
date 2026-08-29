@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { workspaceFileProvider as fsProvider } from "../runtime/tools.js";
+import { workspaceFileProvider as fsProvider } from "../runtime/tools/index.js";
 
 export const fileRoutes = new Hono();
 

@@ -6,7 +6,7 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
 } from "ai";
-import { config, skillsDir } from "../env.js";
+import { config, skillsDir, workspaceDir } from "../env.js";
 import { prisma } from "../db.js";
 import {
   resolveConfiguredSelection,
@@ -16,12 +16,12 @@ import type { ChatUIMessage } from "../chat-types.js";
 import { agentConfigService, type SubAgentConfig } from "./agents.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
-import { createToolRegistry, type ApprovalBridge } from "./tools.js";
 import {
   parseToolPermissionMap,
-  resolveToolPermissions,
-  type ToolPermissionMap,
-} from "./tool-catalog.js";
+  toolProviderRegistry,
+  toolRecordService,
+  type RunContext,
+} from "./tools/index.js";
 import { THINKING_MODES, type PermissionMode, type ThinkingMode } from "./types.js";
 
 export interface ConversationRunContext {
@@ -95,26 +95,29 @@ class AgentRuntimeService {
 
     try {
       // Global permission mode sets the baseline; read-only agents cannot mutate;
-      // project grants from "always allow" win last.
+      // project grants from "always allow" win over both; the tools-page kill
+      // switch wins over everything. Unknown tools (future MCP/skill entries)
+      // default to enabled-but-approval-required.
       const projectOverrides = parseToolPermissionMap(project?.toolPermissions);
-      const toolPermissions = resolveToolPermissions({
+      const disabledTools = await toolRecordService.disabledToolNames();
+      const runContext = toolProviderRegistry.createRunContext({
+        conversationId: context.conversationId,
+        runId: run.id,
+        projectId: context.projectId,
+        workspacePath: rootPath ?? workspaceDir,
+        agentId: definition.id,
         mode: permissionMode,
         readOnly: definition.readOnly,
-        projectOverrides,
-      });
-      const tools = createToolRegistry({
-        rootPath,
-        toolPermissions,
+        overrides: projectOverrides,
+        disabledTools,
         approvals: activeRun.approvals,
-        taskContext: {
-          conversationId: context.conversationId,
-          runId: run.id,
-        },
-      }).toToolSet();
+        signal: activeRun.signal,
+      });
+      const tools = toolProviderRegistry.createToolSet(runContext);
       const maxSteps = mode === "deep" ? 120 : 80;
 
       const subAgents = definition.subAgents.map((entry) =>
-        createSubAgent(entry, model, rootPath, activeRun.approvals, permissionMode, projectOverrides),
+        createSubAgent(entry, model, toolProviderRegistry.deriveContext(runContext, entry)),
       );
 
       const agent = new Agent({
@@ -227,24 +230,21 @@ class AgentRuntimeService {
   }
 
   describe() {
-    const registry = createToolRegistry({
-      readOnly: true,
-      taskContext: { conversationId: "current" },
-    });
-    return THINKING_MODES.map((mode) => ({
-      mode,
-      tools: registry.list().map(({ name }) => name),
-    }));
+    // Tool availability does not vary by thinking mode; policies are listed
+    // for the default permission posture (read-only capability overview).
+    const tools = Object.entries(
+      toolProviderRegistry.policiesFor({ mode: "confirm", readOnly: true }),
+    )
+      .filter(([, policy]) => policy.enabled)
+      .map(([name]) => name);
+    return THINKING_MODES.map((mode) => ({ mode, tools }));
   }
 }
 
 function createSubAgent(
   config: SubAgentConfig,
   model: ChatModel,
-  rootPath: string | undefined,
-  approvals: ApprovalBridge | undefined,
-  permissionMode: PermissionMode,
-  projectOverrides: ToolPermissionMap,
+  context: RunContext,
 ) {
   return new Agent({
     id: config.id,
@@ -252,15 +252,7 @@ function createSubAgent(
     description: config.description,
     instructions: config.instructions,
     model,
-    tools: createToolRegistry({
-      rootPath,
-      toolPermissions: resolveToolPermissions({
-        mode: permissionMode,
-        readOnly: config.readOnly,
-        projectOverrides,
-      }),
-      approvals,
-    }).toToolSet(),
+    tools: toolProviderRegistry.createToolSet(context),
     defaultOptions: { maxSteps: 15 },
   });
 }

@@ -2,8 +2,7 @@ import { prisma } from "../db.js";
 import { sessionRepository } from "../repositories/session-repository.js";
 import type { ChatUIMessage } from "../chat-types.js";
 import type { ModelSelection } from "../providers/provider-service.js";
-import { parseToolPermissionMap } from "./tool-catalog.js";
-import type { ApprovalDecision } from "./tools.js";
+import { parseToolPermissionMap, type ApprovalDecision } from "./tools/index.js";
 
 export const ACTIVE_RUN_STATUSES = ["queued", "running", "waiting_approval"] as const;
 
