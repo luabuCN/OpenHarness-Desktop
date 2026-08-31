@@ -32,7 +32,6 @@ import {
   ReasoningPendingContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
-import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
 import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import type {
@@ -157,11 +156,12 @@ export function ChatPane({
               description="可以询问文件相关内容、粘贴图片，或直接开始新任务。"
             />
           ) : (
-            chat.messages.map((message) => (
+            chat.messages.map((message, index) => (
               <MessageView
                 key={message.id}
                 message={message}
                 isStreaming={message.id === streamingMessageId}
+                isLast={index === chat.messages.length - 1}
                 selectedToolId={selectedToolId}
                 onToolSelect={onToolSelect}
               />
@@ -298,14 +298,14 @@ function AssistantLoadingView({ mode }: { mode: ThinkingMode }) {
     );
   }
 
+  // Pure CSS animations only: JS-driven ones (motion) freeze whenever the
+  // main thread is busy rendering the stream, which reads as "stuck".
   return (
     <div className="flex w-full items-center gap-3 text-sm text-muted-foreground">
       <LoaderCircleIcon className="size-4 animate-spin" />
-      <div className="min-w-0 flex-1 space-y-1">
-        <Shimmer duration={1.6}>思考中...</Shimmer>
-        <Shimmer className="block h-3 max-w-64 opacity-50" duration={2}>
-          {"正在准备回答"}
-        </Shimmer>
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <span className="block h-3 w-40 animate-pulse rounded bg-muted-foreground/25" />
+        <span className="block h-3 max-w-64 animate-pulse rounded bg-muted-foreground/15 [animation-delay:150ms]" />
       </div>
     </div>
   );

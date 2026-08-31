@@ -320,6 +320,106 @@ export function createProvider(input: ProviderInput): Promise<ProviderInfo> {
   }).then((data) => data.provider);
 }
 
+export interface FileChangeInfo {
+  id: string;
+  conversationId: string;
+  projectId?: string | null;
+  path: string;
+  changeKind: "create" | "edit" | "delete";
+  unifiedDiff: string | null;
+  additions: number;
+  deletions: number;
+  createdAt: string;
+}
+
+export interface ChangesSummary {
+  changes: FileChangeInfo[];
+  totals: { files: number; additions: number; deletions: number };
+}
+
+export function listChanges(params: { projectId?: string; conversationId?: string }): Promise<ChangesSummary> {
+  const query = new URLSearchParams();
+  if (params.projectId) query.set("projectId", params.projectId);
+  if (params.conversationId) query.set("conversationId", params.conversationId);
+  return apiFetch<ChangesSummary>(`/api/changes?${query.toString()}`);
+}
+
+export interface RevertResult {
+  results: Array<{ path: string; action: string }>;
+  failures: Array<{ path: string; error: string }>;
+}
+
+export function revertChanges(ids: string[]): Promise<RevertResult> {
+  return apiFetch<RevertResult>("/api/changes/revert", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });
+}
+
+export function revertConversationChanges(conversationId: string): Promise<RevertResult> {
+  return apiFetch<RevertResult>("/api/changes/revert-conversation", {
+    method: "POST",
+    body: JSON.stringify({ conversationId }),
+  });
+}
+
+export interface GitStatusInfo {
+  available: boolean;
+  isRepo?: boolean;
+  reason?: string;
+  root?: string;
+  branch?: string | null;
+  ahead?: number;
+  behind?: number;
+  staged?: string[];
+  changed?: string[];
+  untracked?: string[];
+  conflicted?: string[];
+}
+
+export function gitStatus(projectId: string): Promise<GitStatusInfo> {
+  return apiFetch<GitStatusInfo>(`/api/git/status?projectId=${encodeURIComponent(projectId)}`);
+}
+
+export function gitDiffFile(projectId: string, path: string): Promise<{ path: string | null; diff: string; truncated: boolean }> {
+  return apiFetch(
+    `/api/git/diff?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(path)}`,
+  );
+}
+
+export interface GitCommitInfo {
+  hash: string;
+  shortHash: string;
+  date: string;
+  author: string;
+  message: string;
+}
+
+export function gitLog(projectId: string, limit = 10): Promise<{ commits: GitCommitInfo[] }> {
+  return apiFetch(`/api/git/log?projectId=${encodeURIComponent(projectId)}&limit=${limit}`);
+}
+
+export function gitCommit(projectId: string, files: string[], message: string): Promise<{ commit: string }> {
+  return apiFetch("/api/git/commit", {
+    method: "POST",
+    body: JSON.stringify({ projectId, files, message }),
+  });
+}
+
+export function gitPull(projectId: string): Promise<{ files: string[]; insertions: number; deletions: number }> {
+  return apiFetch("/api/git/pull", {
+    method: "POST",
+    body: JSON.stringify({ projectId }),
+  });
+}
+
+export function gitPush(projectId: string): Promise<{ pushed: boolean; branch: string }> {
+  return apiFetch("/api/git/push", {
+    method: "POST",
+    body: JSON.stringify({ projectId }),
+  });
+}
+
 export function updateProvider(id: string, input: Partial<ProviderInput>): Promise<ProviderInfo> {
   return apiFetch<{ provider: ProviderInfo }>(`/api/providers/${id}`, {
     method: "PUT",

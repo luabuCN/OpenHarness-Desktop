@@ -17,6 +17,7 @@ model Conversation {
   messages  StoredMessage[]
   runs      ThreadRun[]
   tasks     AgentTask[]
+  changes   FileChange[]
 }
 
 model StoredMessage {
@@ -97,6 +98,7 @@ model ThreadRun {
   events         RunEvent[]
   approvals      ToolApproval[]
   tasks          AgentTask[]
+  changes        FileChange[]
 
   @@index([conversationId, status, createdAt])
   @@index([projectId, createdAt])
@@ -171,4 +173,29 @@ model ToolRecord {
   updatedAt   DateTime @updatedAt
 
   @@index([providerId])
+}
+
+/// One workspace file edit performed by an edit tool (writeFile/editFile).
+/// Rows power the changes panel (per-path latest wins) and one-click revert
+/// via the stored before snapshot. Run deletion keeps rows for the panel;
+/// conversation deletion removes them.
+model FileChange {
+  id             String       @id @default(uuid())
+  runId          String?
+  run            ThreadRun?   @relation(fields: [runId], references: [id], onDelete: SetNull)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  projectId      String?
+  path           String
+  changeKind     String
+  before         String?
+  after          String?
+  unifiedDiff    String?
+  additions      Int          @default(0)
+  deletions      Int          @default(0)
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([runId])
 }

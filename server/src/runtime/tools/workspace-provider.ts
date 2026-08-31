@@ -1,12 +1,26 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { SafeFsProvider, SafeShellProvider } from "../../safe-fs.js";
+import { recordFileChange, type FileEditSummary } from "../file-changes.js";
 import type { ToolDescriptor, ToolProvider } from "./registry.js";
 import type { RunContext } from "./run-context.js";
 import type { RuntimeTool } from "./types.js";
 import { formatBytes, isBinaryPath, MAX_WRITE_BYTES } from "./fs-utils.js";
 
-function createWriteFileTool(fsProvider: SafeFsProvider): RuntimeTool {
+/** Shape edit tools return on success: compact for the model, plus the diff
+ * the chat UI renders. before/after snapshots live on the FileChange row. */
+function editOutput(summary: FileEditSummary, extra: Record<string, unknown>) {
+  return {
+    path: summary.path,
+    changeKind: summary.changeKind,
+    additions: summary.additions,
+    deletions: summary.deletions,
+    unifiedDiff: summary.unifiedDiff,
+    ...extra,
+  };
+}
+
+function createWriteFileTool(fsProvider: SafeFsProvider, run: RunContext): RuntimeTool {
   return createTool({
     id: "writeFile",
     description:
@@ -20,17 +34,30 @@ function createWriteFileTool(fsProvider: SafeFsProvider): RuntimeTool {
         return { error: `Content exceeds the ${formatBytes(MAX_WRITE_BYTES)} write limit.` };
       }
       const resolved = fsProvider.resolvePath(filePath);
+      const binary = isBinaryPath(resolved);
+      const existed = await fsProvider.exists(resolved);
+      const before = binary || !existed ? null : await fsProvider.readFile(resolved).catch(() => null);
       await fsProvider.writeFile(resolved, content);
-      return {
+      const summary = await recordFileChange({
+        runId: run.runId,
+        conversationId: run.conversationId,
+        projectId: run.projectId,
+        workspacePath: run.workspacePath,
+        absolutePath: resolved,
+        before,
+        after: binary ? null : content,
+        existed,
+      });
+      return editOutput(summary, {
         filePath: resolved,
         bytesWritten: Buffer.byteLength(content, "utf8"),
         lines: content.split("\n").length,
-      };
+      });
     },
   });
 }
 
-function createEditFileTool(fsProvider: SafeFsProvider): RuntimeTool {
+function createEditFileTool(fsProvider: SafeFsProvider, run: RunContext): RuntimeTool {
   return createTool({
     id: "editFile",
     description:
@@ -66,12 +93,22 @@ function createEditFileTool(fsProvider: SafeFsProvider): RuntimeTool {
       }
 
       await fsProvider.writeFile(resolved, updated);
-      return {
+      const summary = await recordFileChange({
+        runId: run.runId,
+        conversationId: run.conversationId,
+        projectId: run.projectId,
+        workspacePath: run.workspacePath,
+        absolutePath: resolved,
+        before: original,
+        after: updated,
+        existed: true,
+      });
+      return editOutput(summary, {
         filePath: resolved,
         replacements: expectedReplacements,
         oldLength: Buffer.byteLength(original, "utf8"),
         newLength: Buffer.byteLength(updated, "utf8"),
-      };
+      });
     },
   });
 }
@@ -153,8 +190,8 @@ export class WorkspaceToolProvider implements ToolProvider {
   createTools(run: RunContext): Record<string, RuntimeTool> {
     const fsProvider = new SafeFsProvider(run.workspacePath);
     return {
-      writeFile: createWriteFileTool(fsProvider),
-      editFile: createEditFileTool(fsProvider),
+      writeFile: createWriteFileTool(fsProvider, run),
+      editFile: createEditFileTool(fsProvider, run),
       mkdir: createMkdirTool(fsProvider),
       bash: createBashTool(run.workspacePath),
     };

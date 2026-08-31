@@ -129,14 +129,36 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
 });
 
-// Highlighter cache (singleton per language)
-const highlighterCache = new Map<
-  string,
-  Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
->();
+// One shared highlighter for the whole app (both themes), languages loaded on
+// demand. Creating one highlighter per language multiplies engine memory and
+// first-paint cost across a long conversation, which froze the client.
+let highlighterPromise: Promise<
+  HighlighterGeneric<BundledLanguage, BundledTheme>
+> | null = null;
+const loadedLanguages = new Set<BundledLanguage>();
 
-// Token cache
-const tokensCache = new Map<string, TokenizedCode>();
+// Token cache capped both by entries and by total source characters: token
+// trees for large files are many times the source size, and an entry-only
+// cap let long sessions balloon WebView2 memory into renderer OOM crashes.
+const MAX_TOKENS_CACHE_ENTRIES = 200;
+const MAX_TOKENS_CACHE_CHARS = 2_000_000;
+const tokensCache = new Map<string, { value: TokenizedCode; chars: number }>();
+let tokensCacheChars = 0;
+
+function cacheTokens(key: string, value: TokenizedCode, chars: number) {
+  tokensCache.set(key, { value, chars });
+  tokensCacheChars += chars;
+  while (
+    tokensCache.size > MAX_TOKENS_CACHE_ENTRIES ||
+    (tokensCacheChars > MAX_TOKENS_CACHE_CHARS && tokensCache.size > 1)
+  ) {
+    const oldest = tokensCache.keys().next().value;
+    if (oldest === undefined) break;
+    const evicted = tokensCache.get(oldest);
+    if (evicted) tokensCacheChars -= evicted.chars;
+    tokensCache.delete(oldest);
+  }
+}
 
 // Subscribers for async token updates
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
@@ -147,21 +169,25 @@ const getTokensCacheKey = (code: string, language: BundledLanguage) => {
   return `${language}:${code.length}:${start}:${end}`;
 };
 
-const getHighlighter = (
-  language: BundledLanguage
-): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> => {
-  const cached = highlighterCache.get(language);
-  if (cached) {
-    return cached;
+const getHighlighter = (): Promise<
+  HighlighterGeneric<BundledLanguage, BundledTheme>
+> => {
+  if (!highlighterPromise) {
+    highlighterPromise = createHighlighter({
+      langs: [],
+      themes: ["github-light", "github-dark"],
+    });
   }
-
-  const highlighterPromise = createHighlighter({
-    langs: [language],
-    themes: ["github-light", "github-dark"],
-  });
-
-  highlighterCache.set(language, highlighterPromise);
   return highlighterPromise;
+};
+
+const ensureLanguage = async (
+  highlighter: HighlighterGeneric<BundledLanguage, BundledTheme>,
+  language: BundledLanguage,
+) => {
+  if (loadedLanguages.has(language)) return;
+  await highlighter.loadLanguage(language);
+  loadedLanguages.add(language);
 };
 
 // Create raw tokens for immediate display while highlighting loads
@@ -180,6 +206,10 @@ const createRawTokens = (code: string): TokenizedCode => ({
   ),
 });
 
+// Shiki tokenizes synchronously on the main thread; past this size the pass
+// blocks rendering for seconds, so oversized content stays plain text.
+const MAX_HIGHLIGHT_CHARS = 50_000;
+
 // Synchronous highlight with callback for async results
 export const highlightCode = (
   code: string,
@@ -190,9 +220,13 @@ export const highlightCode = (
   const tokensCacheKey = getTokensCacheKey(code, language);
 
   // Return cached result if available
-  const cached = tokensCache.get(tokensCacheKey);
+  const cached = tokensCache.get(tokensCacheKey)?.value;
   if (cached) {
     return cached;
+  }
+
+  if (code.length > MAX_HIGHLIGHT_CHARS) {
+    return null;
   }
 
   // Subscribe callback if provided
@@ -204,9 +238,10 @@ export const highlightCode = (
   }
 
   // Start highlighting in background - fire-and-forget async pattern
-  getHighlighter(language)
+  getHighlighter()
     // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then)
-    .then((highlighter) => {
+    .then(async (highlighter) => {
+      await ensureLanguage(highlighter, language);
       const availableLangs = highlighter.getLoadedLanguages();
       const langToUse = availableLangs.includes(language) ? language : "text";
 
@@ -225,7 +260,7 @@ export const highlightCode = (
       };
 
       // Cache the result
-      tokensCache.set(tokensCacheKey, tokenized);
+      cacheTokens(tokensCacheKey, tokenized, code.length);
 
       // Notify all subscribers
       const subs = subscribers.get(tokensCacheKey);
@@ -433,14 +468,17 @@ export const CodeBlock = ({
   children,
   ...props
 }: CodeBlockProps) => {
-  const contextValue = useMemo(() => ({ code }), [code]);
+  // Callers have passed undefined for empty tool outputs before (errored
+  // parts carry only errorText); a non-string must not crash here again.
+  const safeCode = typeof code === "string" ? code : "";
+  const contextValue = useMemo(() => ({ code: safeCode }), [safeCode]);
 
   return (
     <CodeBlockContext.Provider value={contextValue}>
       <CodeBlockContainer className={className} language={language} {...props}>
         {children}
         <CodeBlockContent
-          code={code}
+          code={safeCode}
           language={language}
           showLineNumbers={showLineNumbers}
         />

@@ -1,5 +1,6 @@
 import { config } from "../../env.js";
 import { BuiltinToolProvider } from "./builtin-provider.js";
+import { GitToolProvider } from "./git-provider.js";
 import { resolveToolPolicies } from "./policies.js";
 import { createRunContext, type RunContext } from "./run-context.js";
 import { TaskToolProvider } from "./task-provider.js";
@@ -224,4 +225,5 @@ export const toolProviderRegistry = new ToolProviderRegistry();
 
 toolProviderRegistry.register(new BuiltinToolProvider());
 toolProviderRegistry.register(new WorkspaceToolProvider());
+toolProviderRegistry.register(new GitToolProvider());
 toolProviderRegistry.register(new TaskToolProvider());

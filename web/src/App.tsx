@@ -38,6 +38,10 @@ const PROJECT_KEY = "openharness.projectId";
 const PANEL_WIDTH_MIN = 280;
 const PANEL_WIDTH_DEFAULT = 400;
 
+/** Stable identity across renders so memoized RightPanel skips work on tabs
+ * that do not read the transcript (files/tasks/changes/git). */
+const EMPTY_MESSAGES: ChatUIMessage[] = [];
+
 function createSessionId() {
   return crypto.randomUUID();
 }
@@ -96,6 +100,7 @@ function SessionView({
   const projectIdRef = useRef(projectId);
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [tasks, setTasks] = useState<AgentTaskInfo[]>([]);
+  const runsSignatureRef = useRef("");
 
   useEffect(() => {
     thinkingModeRef.current = thinkingMode;
@@ -113,9 +118,20 @@ function SessionView({
     projectIdRef.current = projectId;
   }, [projectId]);
 
+  // Poll results keep their object identity only when the server state is
+  // unchanged; skipping identical responses stops poll-driven re-renders of
+  // the whole chat tree during long runs.
+  const tasksSignatureRef = useRef("");
   const refreshTasks = useCallback(() => {
     void listConversationTasks(sessionId)
-      .then(setTasks)
+      .then((next) => {
+        const signature = next
+          .map((task) => `${task.id}:${task.status}:${task.activeForm ?? ""}`)
+          .join("|");
+        if (signature === tasksSignatureRef.current) return;
+        tasksSignatureRef.current = signature;
+        setTasks(next);
+      })
       .catch(() => undefined);
   }, [sessionId]);
 
@@ -153,6 +169,10 @@ function SessionView({
     id: sessionId,
     messages: initialMessages,
     transport,
+    // Coalesce stream chunks into ~20 renders/sec. Without this every token
+    // delta re-renders the whole streaming message (the server accumulates an
+    // entire agent run into one message), which froze long answers.
+    experimental_throttle: 50,
     onFinish: async (event) => {
       void event;
       onFinished();
@@ -169,6 +189,7 @@ function SessionView({
   useEffect(() => {
     if (!busy) {
       setRuns([]);
+      runsSignatureRef.current = "";
       return;
     }
 
@@ -176,7 +197,16 @@ function SessionView({
     const loadRuns = () => {
       void listConversationRuns(sessionId)
         .then((next) => {
-          if (!cancelled) setRuns(next);
+          if (cancelled) return;
+          const signature = next
+            .map(
+              (run) =>
+                `${run.id}:${run.status}:${run.approvals.filter((approval) => approval.status === "pending").length}`,
+            )
+            .join("|");
+          if (signature === runsSignatureRef.current) return;
+          runsSignatureRef.current = signature;
+          setRuns(next);
         })
         .catch(() => undefined);
     };
@@ -313,7 +343,7 @@ function SessionView({
       ) : null}
       {panelOpen ? (
         <RightPanel
-          messages={chat.messages}
+          messages={tab === "tools" || tab === "usage" ? chat.messages : EMPTY_MESSAGES}
           tasks={tasks}
           tab={tab}
           onTabChange={setTab}
@@ -321,6 +351,8 @@ function SessionView({
           onToolSelect={setSelectedToolId}
           width={panelWidth}
           project={projects.find((candidate) => candidate.id === projectId)}
+          sessionId={sessionId}
+          busy={busy}
         />
       ) : null}
     </>

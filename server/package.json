@@ -22,8 +22,10 @@
     "@mastra/core": "1.61.0",
     "@prisma/client": "^6.5.0",
     "ai": "^6.0.97",
+    "diff": "^9.0.0",
     "dotenv": "^16.4.5",
     "hono": "^4.5.0",
+    "simple-git": "^3.36.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -3,21 +3,25 @@ import {
   BarChart3Icon,
   CheckCircleIcon,
   CircleIcon,
+  FileDiffIcon,
   FolderOpenIcon,
-  GlobeIcon,
+  GitBranchIcon,
   ListTodoIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
   WrenchIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { CodeBlock } from "@/components/ai-elements/code-block";
+import { DiffCard } from "@/components/ai-elements/diff-block";
 import {
   FileTree,
   FileTreeFile,
   FileTreeFolder,
 } from "@/components/ai-elements/file-tree";
-import { getStatusBadge, ToolInput } from "@/components/ai-elements/tool";
+import { getStatusBadge, ToolInput, stringifyToolOutput } from "@/components/ai-elements/tool";
+import { ChangesPanel } from "@/components/ChangesPanel";
+import { GitPanel } from "@/components/GitPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -31,12 +35,13 @@ import {
 import {
   collectToolCalls,
   collectUsage,
+  toolNameOf,
   type ChatUIMessage,
   type ToolCallRef,
 } from "@/lib/chat-utils";
 import { cn } from "@/lib/utils";
 
-export type RightTab = "files" | "tasks" | "preview" | "tools" | "usage";
+export type RightTab = "files" | "tasks" | "changes" | "git" | "tools" | "usage";
 
 export interface RightPanelProps {
   messages: ChatUIMessage[];
@@ -47,9 +52,11 @@ export interface RightPanelProps {
   onToolSelect: (id: string) => void;
   width: number;
   project?: ProjectInfo | null;
+  sessionId?: string;
+  busy?: boolean;
 }
 
-export function RightPanel({
+function RightPanelBase({
   messages,
   tasks,
   tab,
@@ -58,6 +65,8 @@ export function RightPanel({
   onToolSelect,
   width,
   project,
+  sessionId,
+  busy,
 }: RightPanelProps) {
   return (
     <aside
@@ -69,7 +78,7 @@ export function RightPanel({
         onValueChange={(value) => onTabChange(value as RightTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="group-data-[orientation=horizontal]/tabs:h-11 w-full shrink-0 justify-start gap-1 rounded-none border-b bg-transparent px-2">
+        <TabsList className="group-data-[orientation=horizontal]/tabs:h-11 w-full shrink-0 justify-start gap-1 overflow-x-auto rounded-none border-b bg-transparent px-2">
           <TabsTrigger value="files" className="h-8 gap-1.5 text-xs">
             <FolderOpenIcon className="size-3.5" />
             文件
@@ -78,9 +87,13 @@ export function RightPanel({
             <ListTodoIcon className="size-3.5" />
             任务
           </TabsTrigger>
-          <TabsTrigger value="preview" className="h-8 gap-1.5 text-xs">
-            <GlobeIcon className="size-3.5" />
-            预览
+          <TabsTrigger value="changes" className="h-8 gap-1.5 text-xs">
+            <FileDiffIcon className="size-3.5" />
+            变更
+          </TabsTrigger>
+          <TabsTrigger value="git" className="h-8 gap-1.5 text-xs">
+            <GitBranchIcon className="size-3.5" />
+            Git
           </TabsTrigger>
           <TabsTrigger value="tools" className="h-8 gap-1.5 text-xs">
             <WrenchIcon className="size-3.5" />
@@ -98,8 +111,11 @@ export function RightPanel({
         <TabsContent value="tasks" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <TaskList tasks={tasks} />
         </TabsContent>
-        <TabsContent value="preview" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
-          <EmptyNote text="该原型暂不支持预览。" />
+        <TabsContent value="changes" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
+          <ChangesPanel key={project?.id ?? "workspace"} project={project} sessionId={sessionId} busy={busy} />
+        </TabsContent>
+        <TabsContent value="git" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
+          <GitPanel key={project?.id ?? "workspace"} project={project} />
         </TabsContent>
         <TabsContent value="tools" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <ToolResults
@@ -115,6 +131,12 @@ export function RightPanel({
     </aside>
   );
 }
+
+/** Memoized: during streaming the messages array gets a new identity on every
+ * chunk. App passes a stable empty array except on the tools/usage tabs, so
+ * the panel and its children skip re-rendering entirely while the agent runs. */
+export const RightPanel = memo(RightPanelBase);
+RightPanel.displayName = "RightPanel";
 
 function EmptyNote({ text }: { text: string }) {
   return <p className="py-10 text-center text-xs text-muted-foreground">{text}</p>;
@@ -419,7 +441,9 @@ function ToolResults({
   selectedToolId?: string;
   onToolSelect: (id: string) => void;
 }) {
-  const calls = collectToolCalls(messages);
+  // messages changes identity on every stream chunk while this tab is open;
+  // the scan is O(all parts), so memoize instead of running it per chunk.
+  const calls = useMemo(() => collectToolCalls(messages), [messages]);
   const selected = calls.find((call) => call.id === selectedToolId) ?? calls.at(-1);
 
   if (calls.length === 0) {
@@ -452,6 +476,28 @@ function ToolResults({
 
 function ToolDetail({ call }: { call: ToolCallRef }) {
   const { part } = call;
+  const name = toolNameOf(part);
+  const output = "output" in part ? part.output : undefined;
+  const outputRecord =
+    output && typeof output === "object" && !(output instanceof Error)
+      ? (output as Record<string, unknown>)
+      : undefined;
+  const editDiff =
+    (name === "editFile" || name === "writeFile") &&
+    part.state === "output-available" &&
+    typeof outputRecord?.path === "string"
+      ? {
+          path: outputRecord.path as string,
+          unifiedDiff:
+            typeof outputRecord.unifiedDiff === "string" ? outputRecord.unifiedDiff : null,
+          additions: typeof outputRecord.additions === "number" ? outputRecord.additions : undefined,
+          deletions: typeof outputRecord.deletions === "number" ? outputRecord.deletions : undefined,
+        }
+      : undefined;
+  const gitDiffText =
+    name === "gitDiff" && typeof outputRecord?.diff === "string" && outputRecord.diff !== "(no changes)"
+      ? (outputRecord.diff as string)
+      : undefined;
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
@@ -471,12 +517,21 @@ function ToolDetail({ call }: { call: ToolCallRef }) {
         </div>
       ) : null}
 
-      {"output" in part && part.output !== undefined ? (
+      {editDiff ? (
+        <DiffCard
+          title={editDiff.path}
+          diff={editDiff.unifiedDiff}
+          additions={editDiff.additions}
+          deletions={editDiff.deletions}
+        />
+      ) : gitDiffText ? (
+        <DiffCard title="git diff" diff={gitDiffText} />
+      ) : output !== undefined ? (
         <CodeBlock
           code={
-            typeof part.output === "string"
-              ? part.output
-              : JSON.stringify(part.output, null, 2)
+            typeof output === "string"
+              ? output
+              : (stringifyToolOutput(output) ?? "")
           }
           language={call.name === "bash" ? "powershell" : "json"}
         />
@@ -486,7 +541,7 @@ function ToolDetail({ call }: { call: ToolCallRef }) {
 }
 
 function UsageView({ messages }: { messages: ChatUIMessage[] }) {
-  const stats = collectUsage(messages);
+  const stats = useMemo(() => collectUsage(messages), [messages]);
 
   const cards = [
     { label: "Agent 轮次", value: String(stats.turns) },

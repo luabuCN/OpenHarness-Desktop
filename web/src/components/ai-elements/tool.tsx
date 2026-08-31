@@ -17,7 +17,7 @@ import {
   XCircleIcon,
 } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { isValidElement } from "react";
+import { isValidElement, memo, useMemo } from "react";
 
 import { CodeBlock } from "./code-block";
 
@@ -116,58 +116,99 @@ export type ToolInputProps = ComponentProps<"div"> & {
   input: ToolPart["input"];
 };
 
-export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
-  <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
-    <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-      参数
-    </h4>
-    <div className="rounded-md bg-muted/50">
-      <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
-    </div>
-  </div>
+/** JSON.stringify returns undefined for undefined/Error inputs and throws on
+ * circular structures — either would hand CodeBlock a non-string `code` and
+ * crash the whole tree (undefined.split). */
+export function stringifyToolOutput(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value instanceof Error) return value.message || String(value);
+  try {
+    const text = JSON.stringify(value, null, 2);
+    return typeof text === "string" ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const MAX_TOOL_TEXT_CHARS = 20_000;
+
+function truncateForDisplay(text: string): string {
+  return text.length > MAX_TOOL_TEXT_CHARS
+    ? `${text.slice(0, MAX_TOOL_TEXT_CHARS)}\n…（内容过长，已截断，全文共 ${text.length} 字符）`
+    : text;
+}
+
+export const ToolInput = memo(
+  ({ className, input, ...props }: ToolInputProps) => {
+    // Stringify once per input object; expanded cards re-render on every poll
+    // or stream chunk and inputs like writeFile content can be large.
+    const code = useMemo(
+      () => truncateForDisplay(JSON.stringify(input, null, 2) ?? ""),
+      [input],
+    );
+
+    return (
+      <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
+        <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+          参数
+        </h4>
+        <div className="rounded-md bg-muted/50">
+          <CodeBlock code={code} language="json" />
+        </div>
+      </div>
+    );
+  },
 );
+ToolInput.displayName = "ToolInput";
 
 export type ToolOutputProps = ComponentProps<"div"> & {
   output: ToolPart["output"];
   errorText: ToolPart["errorText"];
 };
 
-export const ToolOutput = ({
-  className,
-  output,
-  errorText,
-  ...props
-}: ToolOutputProps) => {
-  if (!(output || errorText)) {
-    return null;
-  }
+export const ToolOutput = memo(
+  ({ className, output, errorText, ...props }: ToolOutputProps) => {
+    if (!(output || errorText)) {
+      return null;
+    }
 
-  let Output = <div>{output as ReactNode}</div>;
+    const outputCode =
+      typeof output === "string" || (output && isValidElement(output))
+        ? null
+        : stringifyToolOutput(output);
 
-  if (typeof output === "object" && !isValidElement(output)) {
-    Output = (
-      <CodeBlock code={JSON.stringify(output, null, 2)} language="json" />
-    );
-  } else if (typeof output === "string") {
-    Output = <CodeBlock code={output} language="json" />;
-  }
+    let Output: ReactNode = <div>{output as ReactNode}</div>;
+    // `typeof ... === "string"` matters here: for output-error parts
+    // stringifyToolOutput returns undefined, and `undefined !== null` used to
+    // pass CodeBlock an undefined code and blank the window.
+    if (typeof outputCode === "string") {
+      Output = <CodeBlock code={truncateForDisplay(outputCode)} language="json" />;
+    } else if (typeof output === "string") {
+      Output = <CodeBlock code={truncateForDisplay(output)} language="json" />;
+    }
 
-  return (
-    <div className={cn("space-y-2", className)} {...props}>
-      <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-        {errorText ? "错误" : "结果"}
-      </h4>
-      <div
-        className={cn(
-          "overflow-x-auto rounded-md text-xs [&_table]:w-full",
-          errorText
-            ? "bg-destructive/10 text-destructive"
-            : "bg-muted/50 text-foreground"
-        )}
-      >
-        {errorText && <div>{errorText}</div>}
-        {Output}
+    return (
+      <div className={cn("space-y-2", className)} {...props}>
+        <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
+          {errorText ? "错误" : "结果"}
+        </h4>
+        <div
+          className={cn(
+            "overflow-x-auto rounded-md text-xs [&_table]:w-full",
+            errorText
+              ? "bg-destructive/10 text-destructive"
+              : "bg-muted/50 text-foreground"
+          )}
+        >
+          {errorText && <div>{errorText}</div>}
+          {Output}
+        </div>
       </div>
-    </div>
-  );
-};
+    );
+  },
+  (prevProps: ToolOutputProps, nextProps: ToolOutputProps) =>
+    prevProps.output === nextProps.output &&
+    prevProps.errorText === nextProps.errorText &&
+    prevProps.className === nextProps.className,
+);
+ToolOutput.displayName = "ToolOutput";

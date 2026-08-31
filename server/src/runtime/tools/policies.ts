@@ -9,6 +9,10 @@ export const UNKNOWN_TOOL_POLICY: ToolPolicy = { enabled: true, requireApproval:
 /** Tools that edit files; they skip approval in auto_edit mode, unlike shell commands. */
 const AUTO_EDIT_TOOLS = new Set(["writeFile", "editFile", "mkdir"]);
 
+/** High-impact tools that no global permission mode may auto-approve;
+ * only an explicit per-project "always allow" grant can skip their prompt. */
+const ALWAYS_APPROVE_TOOLS = new Set(["gitPush"]);
+
 export function parseToolPermissionMap(raw?: string | null): ToolPermissionMap {
   if (!raw) return {};
   let parsed: unknown;
@@ -64,6 +68,10 @@ export function resolveToolPolicies(input: ResolveToolPoliciesInput): ToolPermis
     for (const name of Object.keys(policies)) {
       policies[name] = { ...policies[name], requireApproval: false };
     }
+  }
+
+  for (const name of ALWAYS_APPROVE_TOOLS) {
+    if (policies[name]) policies[name] = { ...policies[name], requireApproval: true };
   }
 
   if (input.readOnly) {

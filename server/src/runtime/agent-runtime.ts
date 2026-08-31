@@ -177,12 +177,17 @@ class AgentRuntimeService {
         originalMessages: messages,
         execute: async ({ writer }) => {
           const reader = sourceChunks.getReader();
+          // Persisting every chunk used to await inside the read loop, which
+          // throttled streaming and hammered SQLite on long runs. The chain
+          // keeps event order (sequence assignment stays serialized) without
+          // blocking the stream.
+          let persistChain = Promise.resolve();
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             writer.write(value);
-            await runService
-              .appendTransition(run.id, value.type, value)
+            persistChain = persistChain
+              .then(() => runService.appendTransition(run.id, value.type, value))
               .catch(console.error);
           }
         },

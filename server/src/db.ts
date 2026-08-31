@@ -230,6 +230,37 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "ToolRecord_providerId_idx" ON "ToolRecord" ("providerId")',
   );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "FileChange" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "runId" TEXT,
+      "conversationId" TEXT NOT NULL,
+      "projectId" TEXT,
+      "path" TEXT NOT NULL,
+      "changeKind" TEXT NOT NULL,
+      "before" TEXT,
+      "after" TEXT,
+      "unifiedDiff" TEXT,
+      "additions" INTEGER NOT NULL DEFAULT 0,
+      "deletions" INTEGER NOT NULL DEFAULT 0,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "FileChange_conversationId_fkey"
+        FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT "FileChange_runId_fkey"
+        FOREIGN KEY ("runId") REFERENCES "ThreadRun"("id")
+        ON DELETE SET NULL ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "FileChange_conversationId_createdAt_idx" ON "FileChange" ("conversationId", "createdAt")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "FileChange_projectId_createdAt_idx" ON "FileChange" ("projectId", "createdAt")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "FileChange_runId_idx" ON "FileChange" ("runId")',
+  );
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({
       where: { id: agent.id },
