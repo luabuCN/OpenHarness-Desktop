@@ -6,6 +6,7 @@ import {
   FileDiffIcon,
   FolderOpenIcon,
   GitBranchIcon,
+  GlobeIcon,
   ListTodoIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
@@ -20,6 +21,7 @@ import {
   FileTreeFolder,
 } from "@/components/ai-elements/file-tree";
 import { getStatusBadge, ToolInput, stringifyToolOutput } from "@/components/ai-elements/tool";
+import { BrowserPane, type PreviewTarget } from "@/components/BrowserPane";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { GitPanel } from "@/components/GitPanel";
 import { Badge } from "@/components/ui/badge";
@@ -45,7 +47,7 @@ import {
 } from "@/lib/chat-utils";
 import { cn } from "@/lib/utils";
 
-export type RightTab = "files" | "tasks" | "changes" | "git" | "tools" | "usage";
+export type RightTab = "files" | "browser" | "tasks" | "changes" | "git" | "tools" | "usage";
 
 export interface RightPanelProps {
   messages: ChatUIMessage[];
@@ -60,6 +62,8 @@ export interface RightPanelProps {
   busy?: boolean;
   /** 模型目录里的上下文窗口大小；未知时按 128k 兜底。 */
   contextWindow?: number;
+  /** 内置浏览器面板当前加载的预览目标。 */
+  previewTarget: PreviewTarget | null;
 }
 
 function RightPanelBase({
@@ -74,6 +78,7 @@ function RightPanelBase({
   sessionId,
   busy,
   contextWindow,
+  previewTarget,
 }: RightPanelProps) {
   return (
     <aside
@@ -92,6 +97,10 @@ function RightPanelBase({
           <TabsTrigger value="files" className={TAB_TRIGGER_CLASS}>
             <FolderOpenIcon className="size-3.5" />
             文件
+          </TabsTrigger>
+          <TabsTrigger value="browser" className={TAB_TRIGGER_CLASS}>
+            <GlobeIcon className="size-3.5" />
+            浏览器
           </TabsTrigger>
           <TabsTrigger value="tasks" className={TAB_TRIGGER_CLASS}>
             <ListTodoIcon className="size-3.5" />
@@ -117,6 +126,16 @@ function RightPanelBase({
 
         <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
           <FileBrowser key={project?.id ?? "workspace"} project={project} />
+        </TabsContent>
+        {/* forceMount 保持 iframe 与导航历史跨标签存活；Radix 对 forceMount
+            的内容不设 hidden，需要自己按 data-state 收起，否则浏览器会
+            叠进其他标签页的内容区 */}
+        <TabsContent
+          value="browser"
+          forceMount
+          className="m-0 min-h-0 flex-1 overflow-hidden p-0 data-[state=inactive]:hidden"
+        >
+          <BrowserPane target={previewTarget} />
         </TabsContent>
         <TabsContent value="tasks" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
           <TaskList tasks={tasks} />

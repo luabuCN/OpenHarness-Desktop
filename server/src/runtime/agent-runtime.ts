@@ -186,6 +186,15 @@ class AgentRuntimeService {
       const uiStream = createUIMessageStream<ChatUIMessage>({
         originalMessages: messages,
         execute: async ({ writer }) => {
+          // 工具通过 run.notifyPreview 请求打开面板预览（生成 HTML、启动
+          // 开发服务器等场景）；在进入流读取循环前注入 writer 引用。
+          runContext.notifyPreview = (data) => {
+            writer.write({
+              type: "data-oh:preview.open",
+              id: crypto.randomUUID(),
+              data,
+            });
+          };
           const reader = sourceChunks.getReader();
           // Persisting every chunk used to await inside the read loop, which
           // throttled streaming and hammered SQLite on long runs. The chain

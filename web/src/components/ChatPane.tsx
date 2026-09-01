@@ -1,5 +1,6 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
+import { useCallback } from "react";
 import type { ChatUIMessage } from "@/lib/chat-utils";
 import {
   CircleAlertIcon,
@@ -42,6 +43,8 @@ import type {
   RunInfo,
 } from "@/api";
 import { MessageView } from "./MessageView";
+import { MessageLinkContext } from "./ai-elements/message";
+import { ConversationMinimap } from "./ConversationMinimap";
 import { ModelSelector } from "./ModelSelector";
 import { AgentSelector } from "./AgentSelector";
 import { ProjectSelector } from "./ProjectSelector";
@@ -87,6 +90,8 @@ export interface ChatPaneProps {
     action: ApprovalAction,
   ) => void;
   turnNote?: TurnOutcomeNote;
+  /** 聊天内容里的链接点击后改在内置浏览器面板中打开。 */
+  onOpenLink?: (url: string) => void;
 }
 
 export function ChatPane({
@@ -112,6 +117,7 @@ export function ChatPane({
   pendingApprovals,
   onApprovalDecision,
   turnNote,
+  onOpenLink,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
   const waiting = busy && !hasVisibleAssistantWork(chat.messages);
@@ -130,6 +136,21 @@ export function ChatPane({
     a.approval.createdAt.localeCompare(b.approval.createdAt),
   );
   const activeApproval = sortedApprovals[0];
+
+  // 聊天里的链接（markdown/自动识别的 URL）默认会走系统浏览器打开；
+  // 拦截后送进内置浏览器面板，和预览行为保持一致。
+  const handleLinkClickCapture = useCallback(
+    (event: React.MouseEvent) => {
+      const anchor = (event.target as HTMLElement).closest?.("a[href]");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") ?? "";
+      if (!/^https?:\/\//i.test(href)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onOpenLink?.(href);
+    },
+    [onOpenLink],
+  );
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
@@ -154,41 +175,44 @@ export function ChatPane({
         </Button>
       </header>
 
-      <Conversation>
-        <ConversationContent className="mx-auto w-full max-w-3xl gap-6 py-6">
-          {chat.messages.length === 0 ? (
-            <ConversationEmptyState
-              title="本地工作区已就绪"
-              description="可以询问文件相关内容、粘贴图片，或直接开始新任务。"
-            />
-          ) : (
-            chat.messages.map((message) => (
-              <MessageView
-                key={message.id}
-                message={message}
-                isStreaming={message.id === streamingMessageId}
-                selectedToolId={selectedToolId}
-                onToolSelect={onToolSelect}
+      <MessageLinkContext.Provider value={onOpenLink}>
+        <Conversation onClickCapture={handleLinkClickCapture}>
+          <ConversationContent className="mx-auto w-full max-w-3xl gap-6 py-6">
+            {chat.messages.length === 0 ? (
+              <ConversationEmptyState
+                title="本地工作区已就绪"
+                description="可以询问文件相关内容、粘贴图片，或直接开始新任务。"
               />
-            ))
-          )}
-          {waiting ? <AssistantLoadingView effort={reasoningEffort} /> : null}
-          {!busy && turnNote ? <TurnNoteView note={turnNote} /> : null}
-          {!busy && error ? <AssistantErrorView message={error} /> : null}
-          {chat.messages.length === 0 ? (
-            <Suggestions className="justify-center">
-              {SUGGESTIONS.map((suggestion) => (
-                <Suggestion
-                  key={suggestion}
-                  suggestion={suggestion}
-                  onClick={(text) => void chat.sendMessage({ text })}
+            ) : (
+              chat.messages.map((message) => (
+                <MessageView
+                  key={message.id}
+                  message={message}
+                  isStreaming={message.id === streamingMessageId}
+                  selectedToolId={selectedToolId}
+                  onToolSelect={onToolSelect}
                 />
-              ))}
-            </Suggestions>
-          ) : null}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
+              ))
+            )}
+            {waiting ? <AssistantLoadingView effort={reasoningEffort} /> : null}
+            {!busy && turnNote ? <TurnNoteView note={turnNote} /> : null}
+            {!busy && error ? <AssistantErrorView message={error} /> : null}
+            {chat.messages.length === 0 ? (
+              <Suggestions className="justify-center">
+                {SUGGESTIONS.map((suggestion) => (
+                  <Suggestion
+                    key={suggestion}
+                    suggestion={suggestion}
+                    onClick={(text) => void chat.sendMessage({ text })}
+                  />
+                ))}
+              </Suggestions>
+            ) : null}
+          </ConversationContent>
+          <ConversationMinimap messages={chat.messages} />
+          <ConversationScrollButton />
+        </Conversation>
+      </MessageLinkContext.Provider>
 
       <div className="shrink-0 px-4 pb-4">
         <div className="mx-auto w-full max-w-3xl">

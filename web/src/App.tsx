@@ -25,6 +25,7 @@ import {
 } from "./api";
 import type { ChatUIMessage } from "./lib/chat-utils";
 import { ChatPane, type TurnOutcomeNote } from "./components/ChatPane";
+import type { PreviewTarget } from "./components/BrowserPane";
 import { defaultModelSelection } from "./components/ModelSelector";
 import { RightPanel, type RightTab } from "./components/RightPanel";
 import { AppSidebar } from "./components/AppSidebar";
@@ -54,6 +55,11 @@ const PANEL_WIDTH_DEFAULT = 460;
 /** Stable identity across renders so memoized RightPanel skips work on tabs
  * that do not read the transcript (files/tasks/changes/git). */
 const EMPTY_MESSAGES: ChatUIMessage[] = [];
+
+/** 各会话的预览通知处理状态，模块级共享：SessionView 因 key 切换或热更新
+ * 重挂载时，已消费的通知不会重复触发，更重要的是首次基线不会把重挂载后
+ * 才到的新通知误当历史吞掉（组件级 ref 在重挂载时会整体重置）。 */
+const previewSeen = new Map<string, { seen: Set<string>; baselined: boolean }>();
 
 function createSessionId() {
   return crypto.randomUUID();
@@ -107,6 +113,7 @@ function SessionView({
   const [tab, setTab] = useState<RightTab>("files");
   const [selectedToolId, setSelectedToolId] = useState<string>();
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   const reasoningEffortRef = useRef(reasoningEffort);
   const permissionModeRef = useRef(permissionMode);
   const agentIdRef = useRef(agentId);
@@ -320,6 +327,60 @@ function SessionView({
     setTab("tools");
   }, []);
 
+  // 监听 data-oh:preview.open（生成 HTML / 启动开发服务器）：新通知到达时
+  // 载入浏览器面板并自动切换。基线只在页面生命周期内首次接触该会话时登记
+  // 一次，之后无论 SessionView 怎么重挂载，新通知都会正常触发。
+  useEffect(() => {
+    let state = previewSeen.get(sessionId);
+    if (!state) {
+      state = { seen: new Set(), baselined: false };
+      previewSeen.set(sessionId, state);
+    }
+    if (!state.baselined) {
+      // 首次基线：当前会话里已有的通知视为历史，不触发自动打开
+      state.baselined = true;
+      for (const message of chat.messages) {
+        for (const part of message.parts) {
+          if (part.type === "data-oh:preview.open") {
+            state.seen.add(part.id ?? part.data.url);
+          }
+        }
+      }
+      return;
+    }
+    for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
+      const parts = chat.messages[i].parts;
+      for (let j = parts.length - 1; j >= 0; j -= 1) {
+        const part = parts[j];
+        if (part.type !== "data-oh:preview.open") continue;
+        // 数据部件的 id 是可选的；缺省时用消息内位置兜底。
+        const seenKey = part.id ?? `${i}:${j}:${part.data.url}`;
+        if (state.seen.has(seenKey)) continue;
+        state.seen.add(seenKey);
+        setPreviewTarget({
+          url: part.data.url,
+          kind: part.data.kind,
+          label: part.data.label,
+          nonce: Date.now(),
+        });
+        setTab("browser");
+        if (!panelOpen) onPanelOpenChange(true);
+        return;
+      }
+    }
+  }, [chat.messages, sessionId, panelOpen, onPanelOpenChange]);
+
+  // 聊天里的链接点击后送进内置浏览器面板（localhost 地址标记为服务器预览）
+  const handleOpenLink = useCallback(
+    (url: string) => {
+      const isLocal = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|$)/i.test(url);
+      setPreviewTarget({ url, kind: isLocal ? "server" : undefined, nonce: Date.now() });
+      setTab("browser");
+      if (!panelOpen) onPanelOpenChange(true);
+    },
+    [panelOpen, onPanelOpenChange],
+  );
+
   const handleTogglePanel = useCallback(() => {
     onPanelOpenChange(!panelOpen);
   }, [onPanelOpenChange, panelOpen]);
@@ -383,6 +444,7 @@ function SessionView({
           void handleApprovalDecision(runId, approvalId, action)
         }
         turnNote={turnNote}
+        onOpenLink={handleOpenLink}
       />
       {panelOpen ? (
         <div
@@ -407,6 +469,7 @@ function SessionView({
           sessionId={sessionId}
           busy={busy}
           contextWindow={contextWindow}
+          previewTarget={previewTarget}
         />
       ) : null}
     </>

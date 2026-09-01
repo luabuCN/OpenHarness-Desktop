@@ -323,6 +323,43 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 
+/** 聊天链接的打开方式由外层（ChatPane）通过 context 注入；未提供时退回
+ * 默认 <a> 行为。用 context 而非 props 穿透，保持 MessageResponse 的
+ * children 相等即跳过重渲染的 memo 策略。 */
+export const MessageLinkContext = createContext<((url: string) => void) | undefined>(
+  undefined,
+);
+
+const StreamdownLink = ({
+  href,
+  children,
+  ...props
+}: ComponentProps<"a">) => {
+  const openLink = useContext(MessageLinkContext);
+  if (href && /^https?:\/\//i.test(href) && openLink) {
+    return (
+      <button
+        type="button"
+        data-streamdown="link"
+        className="wrap-anywhere cursor-pointer appearance-none text-left font-medium text-primary underline"
+        onClick={(event) => {
+          event.preventDefault();
+          openLink(href);
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
+  return (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  );
+};
+
+const streamdownComponents = { a: StreamdownLink };
+
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
@@ -331,6 +368,7 @@ export const MessageResponse = memo(
         className
       )}
       plugins={streamdownPlugins}
+      components={streamdownComponents}
       {...props}
     />
   ),

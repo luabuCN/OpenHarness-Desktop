@@ -8,6 +8,7 @@ import {
   FileTextIcon,
   FolderIcon,
   GitBranchIcon,
+  GlobeIcon,
   ListTodoIcon,
   LoaderCircleIcon,
   MinusIcon,
@@ -70,7 +71,7 @@ function MessageViewBase({
     if (part.type === "text") {
       return (
         <MessageContent key={index}>
-          <MessageResponse>{part.text}</MessageResponse>
+          <MessageResponse>{linkifyUrls(part.text)}</MessageResponse>
         </MessageContent>
       );
     }
@@ -102,6 +103,7 @@ function MessageViewBase({
     // are outside the viewport; long conversations scroll and stream smoothly.
     <Message
       from={message.role}
+      data-minimap-id={message.id}
       className="[content-visibility:auto] [contain-intrinsic-size:auto_720px]"
     >
       {isUser ? (
@@ -160,6 +162,32 @@ function MessageViewBase({
 type ActivityItem =
   | { kind: "thinking"; part: ReasoningUIPart }
   | { kind: "tool"; part: ToolPart };
+
+/** 把消息里的裸 URL 转成 markdown 链接（dev server 地址等），点击后由
+ * ChatPane 的捕获层送进内置浏览器面板。跳过代码围栏与行内代码，避免
+ * 改写代码内容；已处在链接语法里的 URL（前邻 [ 或 ( ）不再重复包一层。 */
+function linkifyUrls(text: string): string {
+  const linkifySegment = (segment: string) =>
+    segment
+      .split(/(`[^`\n]*`)/g)
+      .map((piece, pieceIndex) =>
+        pieceIndex % 2 === 1
+          ? piece
+          : piece.replace(
+              /(^|[^[(\w])(https?:\/\/[^\s<>()[\]{}]*)/g,
+              (_match, prefix: string, rawUrl: string) => {
+                const url = rawUrl.replace(/[.,;:。；、*_]+$/, "");
+                const tail = rawUrl.slice(url.length);
+                return `${prefix}[${url}](${url})${tail}`;
+              },
+            ),
+      )
+      .join("");
+  return text
+    .split(/(```[\s\S]*?(?:```|$))/g)
+    .map((segment, index) => (index % 2 === 1 ? segment : linkifySegment(segment)))
+    .join("");
+}
 
 type AssistantBlock =
   | { kind: "activity"; items: ActivityItem[] }
@@ -573,6 +601,13 @@ function DataPartView({ part }: { part: DataPart }): ReactNode {
       return (
         <SystemNote icon={<RefreshCwIcon className="size-3.5" />}>
           正在重试（第 {part.data.attempt} 次）：{part.data.reason}
+        </SystemNote>
+      );
+    case "data-oh:preview.open":
+      return (
+        <SystemNote icon={<GlobeIcon className="size-3.5" />}>
+          {part.data.kind === "server" ? "开发服务器已就绪" : "页面已生成"}
+          {part.data.label ? `（${part.data.label}）` : ""}，已在浏览器面板中打开
         </SystemNote>
       );
     default:

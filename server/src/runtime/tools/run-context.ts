@@ -6,6 +6,13 @@ import type {
   ToolPolicy,
 } from "./types.js";
 
+/** 面板预览通知：工具执行后希望在内置浏览器中打开的地址。 */
+export interface PreviewNotification {
+  url: string;
+  kind: "file" | "server";
+  label?: string;
+}
+
 export interface RunContextInit {
   conversationId: string;
   runId?: string;
@@ -24,6 +31,9 @@ export interface RunContextInit {
   signal?: AbortSignal;
   /** True for derived sub-agent contexts (no per-conversation task tools). */
   subAgent?: boolean;
+  /** 向当前聊天流推送 data-oh:preview.open 数据部件。由 agent-runtime 在
+   * 流式执行回调里注入；工具用它请求前端在内置浏览器面板中打开预览。 */
+  notifyPreview?: (data: PreviewNotification) => void;
 }
 
 /**

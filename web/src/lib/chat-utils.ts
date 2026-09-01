@@ -24,6 +24,13 @@ export interface TurnUsagePartData {
   modelId?: string;
 }
 
+/** 内置浏览器面板的预览目标（服务端工具通过 data-oh:preview.open 推送）。 */
+export interface PreviewOpenData {
+  url: string;
+  kind: "file" | "server";
+  label?: string;
+}
+
 export type ChatUIMessage = UIMessage<
   unknown,
   {
@@ -35,6 +42,7 @@ export type ChatUIMessage = UIMessage<
     "oh:subagent.error": { agentName: string; error: string };
     "oh:compaction.done": { messagesRemoved: number };
     "oh:retry": { attempt: number; reason: string };
+    "oh:preview.open": PreviewOpenData;
   }
 >;
 

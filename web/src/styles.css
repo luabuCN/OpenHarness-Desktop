@@ -181,6 +181,97 @@
   }
 }
 
+/* 对话大纲（minimap）：对话区左缘纵向居中的一列短横线，用户消息为长线、
+   助手消息为短线。密集时按标记数收缩间距而不是撑出会话区；横线宽度由
+   --magnify（JS 写入）驱动、只沿水平方向变化，放大不会引起轨道重排。 */
+.conversation-minimap-rail {
+  position: absolute;
+  left: 6px;
+  top: 8px;
+  bottom: 8px;
+  z-index: 6;
+  display: flex;
+  width: 26px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: clamp(0px, calc(4px - var(--minimap-marker-count) * 0.05px), 2px);
+}
+
+.conversation-minimap-marker {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  width: 100%;
+  height: 8px;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.conversation-minimap-marker::before {
+  content: "";
+  height: min(2px, 100%);
+  width: calc(var(--dash-w) * var(--magnify, 1));
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--foreground) 32%, transparent);
+  transition: width 90ms ease-out, background 120ms ease-out;
+}
+
+.conversation-minimap-marker.user {
+  --dash-w: 13px;
+}
+
+.conversation-minimap-marker.assistant {
+  --dash-w: 8px;
+}
+
+.conversation-minimap-marker:hover::before,
+.conversation-minimap-marker:focus-visible::before {
+  background: color-mix(in oklab, var(--foreground) 60%, transparent);
+}
+
+.conversation-minimap-marker.active::before {
+  background: var(--foreground);
+}
+
+.conversation-minimap-popover {
+  position: absolute;
+  left: 30px;
+  z-index: 7;
+  width: 248px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 1px 3px oklch(0 0 0 / 10%),
+    0 4px 16px oklch(0 0 0 / 8%);
+  pointer-events: none;
+}
+
+.conversation-minimap-popover-role {
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.conversation-minimap-popover-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* 侧边栏会话标题：悬停时超长文本来回滚动（marquee） */
 @keyframes session-title-scroll {
   0%,

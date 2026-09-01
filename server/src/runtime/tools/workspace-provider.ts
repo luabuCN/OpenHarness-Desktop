@@ -2,6 +2,8 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { SafeFsProvider, SafeShellProvider } from "../../safe-fs.js";
 import { recordFileChange, type FileEditSummary } from "../file-changes.js";
+import { detectLiveServerUrl, looksLikeDevServer, startDevServer } from "../dev-server.js";
+import { buildPreviewUrl } from "../preview-url.js";
 import type { ToolDescriptor, ToolProvider } from "./registry.js";
 import type { RunContext } from "./run-context.js";
 import type { RuntimeTool } from "./types.js";
@@ -18,6 +20,13 @@ function editOutput(summary: FileEditSummary, extra: Record<string, unknown>) {
     unifiedDiff: summary.unifiedDiff,
     ...extra,
   };
+}
+
+/** 生成 HTML 页面后请求面板预览；写文件成功后再通知，保证 iframe 拿到的
+ * 是新内容。其他扩展名不推送，避免把代码文件当页面打开。 */
+function notifyHtmlPreview(run: RunContext, absolutePath: string, label: string) {
+  if (!/\.html?$/i.test(absolutePath)) return;
+  run.notifyPreview?.({ url: buildPreviewUrl(absolutePath), kind: "file", label });
 }
 
 function createWriteFileTool(fsProvider: SafeFsProvider, run: RunContext): RuntimeTool {
@@ -48,6 +57,7 @@ function createWriteFileTool(fsProvider: SafeFsProvider, run: RunContext): Runti
         after: binary ? null : content,
         existed,
       });
+      notifyHtmlPreview(run, resolved, summary.path);
       return editOutput(summary, {
         filePath: resolved,
         bytesWritten: Buffer.byteLength(content, "utf8"),
@@ -57,8 +67,7 @@ function createWriteFileTool(fsProvider: SafeFsProvider, run: RunContext): Runti
   });
 }
 
-function createEditFileTool(fsProvider: SafeFsProvider, run: RunContext): RuntimeTool {
-  return createTool({
+function createEditFileTool(fsProvider: SafeFsProvider, run: RunContext): RuntimeTool {  return createTool({
     id: "editFile",
     description:
       "Replace exact occurrences in a UTF-8 text file. Include enough surrounding text to make replacements unambiguous.",
@@ -103,6 +112,7 @@ function createEditFileTool(fsProvider: SafeFsProvider, run: RunContext): Runtim
         after: updated,
         existed: true,
       });
+      notifyHtmlPreview(run, resolved, summary.path);
       return editOutput(summary, {
         filePath: resolved,
         replacements: expectedReplacements,
@@ -126,17 +136,35 @@ function createMkdirTool(fsProvider: SafeFsProvider): RuntimeTool {
   });
 }
 
-function createBashTool(rootPath: string): RuntimeTool {
+function createBashTool(rootPath: string, run: RunContext): RuntimeTool {
   const shellProvider = new SafeShellProvider(rootPath);
   return createTool({
     id: "bash",
     description:
-      "Execute a shell command in the project workspace. Commands wait for explicit user approval before execution. Uses PowerShell on Windows and Bash elsewhere.",
+      "Execute a shell command in the project workspace. Commands wait for explicit user approval before execution. Uses PowerShell on Windows and Bash elsewhere. Dev-server style commands (pnpm dev, npm start, vite, python -m http.server, ...) are started in the background instead of blocking, and their URL is reported back.",
     inputSchema: z.object({
       command: z.string().min(1),
       timeout: z.number().int().min(1_000).max(300_000).optional().default(30_000),
     }),
-    execute: async ({ command, timeout }) => shellProvider.exec(command, { timeout }),
+    execute: async ({ command, timeout }) => {
+      // 开发服务器类命令会一直运行，阻塞式执行只会等到超时被杀；
+      // 改为后台拉起并探测访问地址，成功后在内置浏览器面板中打开。
+      if (looksLikeDevServer(command)) {
+        const started = await startDevServer({ command, cwd: rootPath });
+        if (started.url) {
+          run.notifyPreview?.({ url: started.url, kind: "server", label: command.slice(0, 80) });
+        }
+        return started;
+      }
+      const result = await shellProvider.exec(command, { timeout });
+      // 兜底：前台命令的输出里报出了 localhost 地址且端口确实在监听
+      // （比如通过自建脚本/批处理启动的服务），同样请求面板预览。
+      const liveUrl = await detectLiveServerUrl(`${result.stdout}\n${result.stderr}`);
+      if (liveUrl) {
+        run.notifyPreview?.({ url: liveUrl, kind: "server", label: command.slice(0, 80) });
+      }
+      return result;
+    },
   });
 }
 
@@ -193,7 +221,7 @@ export class WorkspaceToolProvider implements ToolProvider {
       writeFile: createWriteFileTool(fsProvider, run),
       editFile: createEditFileTool(fsProvider, run),
       mkdir: createMkdirTool(fsProvider),
-      bash: createBashTool(run.workspacePath),
+      bash: createBashTool(run.workspacePath, run),
     };
   }
 }
