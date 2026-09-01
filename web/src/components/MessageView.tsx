@@ -1,13 +1,33 @@
-import { isToolUIPart, type FileUIPart, type ReasoningUIPart, type TextUIPart } from "ai";
+import { isToolUIPart, type FileUIPart, type ReasoningUIPart } from "ai";
 import {
   BotIcon,
+  CheckIcon,
   ChevronRightIcon,
+  ClockIcon,
   CopyIcon,
+  FileTextIcon,
+  FolderIcon,
+  GitBranchIcon,
+  ListTodoIcon,
+  LoaderCircleIcon,
+  MinusIcon,
   PaperclipIcon,
+  PencilIcon,
   RefreshCwIcon,
+  SearchIcon,
+  SparklesIcon,
+  SquarePenIcon,
   SquareStackIcon,
+  TerminalIcon,
+  WrenchIcon,
+  XCircleIcon,
 } from "lucide-react";
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cjk } from "@streamdown/cjk";
+import { code } from "@streamdown/code";
+import { math } from "@streamdown/math";
+import { mermaid } from "@streamdown/mermaid";
+import { Streamdown } from "streamdown";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DiffCard } from "@/components/ai-elements/diff-block";
 import {
@@ -17,22 +37,15 @@ import {
   MessageContent,
   MessageResponse,
 } from "@/components/ai-elements/message";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningPendingContent,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
-import { Badge } from "@/components/ui/badge";
-import { messageText, toolNameOf, type ChatUIMessage, type ToolPart } from "@/lib/chat-utils";
+import { Shimmer } from "@/components/ai-elements/shimmer";
+import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { cn } from "@/lib/utils";
+import { messageText, type ChatUIMessage, type ToolPart } from "@/lib/chat-utils";
+import { describeTool, type ToolAction } from "@/lib/tool-display";
 
 interface MessageViewProps {
   message: ChatUIMessage;
   isStreaming?: boolean;
-  /** False for every message except the newest; older assistant messages
-   * collapse their reasoning/tool-call history to keep the DOM small. */
-  isLast?: boolean;
   selectedToolId?: string;
   onToolSelect?: (id: string) => void;
 }
@@ -40,36 +53,20 @@ interface MessageViewProps {
 function MessageViewBase({
   message,
   isStreaming = false,
-  isLast = false,
   selectedToolId,
   onToolSelect,
 }: MessageViewProps) {
   const isUser = message.role === "user";
 
-  // aime-chat-style history slimming: an older assistant message renders only
-  // its final text; the reasoning, tool calls and intermediate text before it
-  // move into a collapsed section whose content stays unmounted until opened.
-  const { visibleParts, hiddenParts } = useMemo(() => {
-    if (isUser || isLast) {
-      return { visibleParts: message.parts, hiddenParts: [] as ChatUIMessage["parts"] };
-    }
-    let cut = -1;
-    for (let index = message.parts.length - 1; index >= 0; index -= 1) {
-      if (message.parts[index].type === "text") {
-        cut = index;
-        break;
-      }
-    }
-    if (cut <= 0) {
-      return { visibleParts: message.parts, hiddenParts: [] as ChatUIMessage["parts"] };
-    }
-    return {
-      hiddenParts: message.parts.slice(0, cut),
-      visibleParts: message.parts.slice(cut),
-    };
-  }, [message, isUser, isLast]);
+  // 连续的 reasoning / tool 调用归为一个“活动”块，整块折叠成一行
+  // （“处理中 … / 已处理 · N 个步骤”）；其余 part 原样渲染。
+  const blocks = useMemo(() => groupParts(message.parts), [message.parts]);
 
-  const renderAssistantPart = (part: ChatUIMessage["parts"][number], index: number): ReactNode => {
+  const renderAssistantPart = (
+    part: ChatUIMessage["parts"][number],
+    index: number,
+    isGroupActive: boolean,
+  ): ReactNode => {
     if (part.type === "text") {
       return (
         <MessageContent key={index}>
@@ -78,7 +75,7 @@ function MessageViewBase({
       );
     }
     if (part.type === "reasoning") {
-      return <ReasoningPartView key={index} part={part} />;
+      return <ThinkingLine key={index} part={part} streaming={isGroupActive} />;
     }
     if (part.type === "file") {
       return (
@@ -89,7 +86,7 @@ function MessageViewBase({
     }
     if (isToolUIPart(part)) {
       return (
-        <ToolPartView
+        <ToolLine
           key={part.toolCallId}
           part={part}
           active={selectedToolId === part.toolCallId}
@@ -124,20 +121,27 @@ function MessageViewBase({
           })}
         </MessageContent>
       ) : (
-        <>
-          {hiddenParts.length > 0 ? (
-            <Collapsible className="w-full">
-              <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
-                <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
-                展开过程（{hiddenParts.length} 项）
-              </CollapsibleTrigger>
-              <CollapsibleContent className="flex flex-col gap-2 outline-none data-[state=closed]:hidden">
-                {hiddenParts.map((part, index) => renderAssistantPart(part, index))}
-              </CollapsibleContent>
-            </Collapsible>
-          ) : null}
-          {visibleParts.map((part, index) => renderAssistantPart(part, index))}
-        </>
+        blocks.map((block, index) =>
+          block.kind === "activity" ? (
+            block.items.length === 1 ? (
+              renderAssistantPart(
+                block.items[0].part,
+                index,
+                block.items[0].kind === "thinking" && block.items[0].part.state === "streaming",
+              )
+            ) : (
+              <ActivityGroup
+                key={index}
+                items={block.items}
+                isActive={isStreaming && index === blocks.length - 1}
+                selectedToolId={selectedToolId}
+                onToolSelect={onToolSelect}
+              />
+            )
+          ) : (
+            renderAssistantPart(block.part, index, false)
+          ),
+        )
       )}
       {isUser || !isStreaming ? (
         <MessageActions className={isUser ? "justify-end" : undefined}>
@@ -153,58 +157,140 @@ function MessageViewBase({
   );
 }
 
-/** Historical messages keep their object identity across streaming updates and
- * polls, so this comparator makes per-chunk re-renders skip every message
- * except the one actively streaming. Long conversations stay interactive. */
-export const MessageView = memo(
-  MessageViewBase,
-  (prev, next) =>
-    prev.message === next.message &&
-    prev.isStreaming === next.isStreaming &&
-    prev.isLast === next.isLast &&
-    prev.selectedToolId === next.selectedToolId &&
-    prev.onToolSelect === next.onToolSelect,
-);
-MessageView.displayName = "MessageView";
+type ActivityItem =
+  | { kind: "thinking"; part: ReasoningUIPart }
+  | { kind: "tool"; part: ToolPart };
 
-function FilePartView({ part }: { part: FileUIPart }) {
-  if (part.mediaType.startsWith("image/")) {
+type AssistantBlock =
+  | { kind: "activity"; items: ActivityItem[] }
+  | { kind: "part"; part: ChatUIMessage["parts"][number] };
+
+function groupParts(parts: ChatUIMessage["parts"]): AssistantBlock[] {
+  const blocks: AssistantBlock[] = [];
+  let activity: ActivityItem[] | null = null;
+  const flush = () => {
+    if (activity && activity.length > 0) blocks.push({ kind: "activity", items: activity });
+    activity = null;
+  };
+  parts.forEach((part) => {
+    if (part.type === "reasoning") {
+      activity = activity ?? [];
+      activity.push({ kind: "thinking", part });
+      return;
+    }
+    if (isToolUIPart(part)) {
+      activity = activity ?? [];
+      activity.push({ kind: "tool", part });
+      return;
+    }
+    flush();
+    blocks.push({ kind: "part", part });
+  });
+  flush();
+  return blocks;
+}
+
+/** Streaming updates replace the message object each chunk; unchanged parts
+ * keep their object identity, so memoized part views skip everything except
+ * the actively streaming part. */
+const ThinkingLine = memo(function ThinkingLine({
+  part,
+  streaming,
+}: {
+  part: ReasoningUIPart;
+  streaming: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const text = part.text ?? "";
+  const tail = lastThinkingLine(text);
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="group/think w-full">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+        <SparklesIcon className="size-3.5 shrink-0" />
+        {streaming ? <Shimmer as="span" duration={1.6}>思考中</Shimmer> : <span className="shrink-0">思考</span>}
+        {tail ? <span className="min-w-0 flex-1 truncate">{tail}</span> : null}
+        <ChevronRightIcon className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]/think:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="outline-none">
+        <div className="ml-3 border-l py-1 pl-3 text-sm text-muted-foreground">
+          {text ? (
+            <Streamdown plugins={streamdownPlugins}>{text}</Streamdown>
+          ) : (
+            <Shimmer duration={2}>等待思考输出…</Shimmer>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+});
+
+const streamdownPlugins = { cjk, code, math, mermaid };
+
+/** 思考文本的一行式摘要：取最后一个非空行，去掉 Markdown 修饰符。 */
+function lastThinkingLine(text: string): string {
+  const lines = text
+    .split("\n")
+    .map((line) => line.replace(/^#+\s*|\*\*/g, "").trim())
+    .filter(Boolean);
+  const last = lines[lines.length - 1] ?? "";
+  return last.length > 100 ? `${last.slice(0, 100)}…` : last;
+}
+
+const ACTION_ICONS: Record<ToolAction, typeof WrenchIcon> = {
+  read: FileTextIcon,
+  list: FolderIcon,
+  search: SearchIcon,
+  write: SquarePenIcon,
+  edit: PencilIcon,
+  run: TerminalIcon,
+  git: GitBranchIcon,
+  task: ListTodoIcon,
+  use: WrenchIcon,
+};
+
+const RUNNING_STATES = new Set<ToolPart["state"]>(["input-streaming", "input-available"]);
+
+function StatusPill({ state }: { state: ToolPart["state"] }) {
+  if (state === "output-available") {
     return (
-      <img
-        src={part.url}
-        alt={part.filename ?? "附件"}
-        className="max-h-40 rounded-md border"
-      />
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+        <CheckIcon className="size-3 text-green-600" />
+        已完成
+      </span>
+    );
+  }
+  if (state === "output-error") {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-red-600">
+        <XCircleIcon className="size-3" />
+        失败
+      </span>
+    );
+  }
+  if (state === "output-denied") {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-orange-600">
+        <MinusIcon className="size-3" />
+        已拒绝
+      </span>
+    );
+  }
+  if (state === "approval-requested") {
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] text-yellow-600">
+        <ClockIcon className="size-3" />
+        等待审批
+      </span>
     );
   }
   return (
-    <Badge variant="secondary" className="gap-1">
-      <PaperclipIcon className="size-3" />
-      {part.filename ?? part.mediaType}
-    </Badge>
+    <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+      <LoaderCircleIcon className="size-3 animate-spin" />
+      运行中
+    </span>
   );
 }
-
-/** A run accumulates every part of the whole agent loop into the streaming
- * message, which re-renders per chunk. Unchanged parts keep their object
- * identity across chunks, so memoized part views skip everything except the
- * actively streaming part. */
-const ReasoningPartView = memo(function ReasoningPartView({
-  part,
-}: {
-  part: ReasoningUIPart;
-}) {
-  return (
-    <Reasoning isStreaming={part.state === "streaming"} className="w-full">
-      <ReasoningTrigger />
-      {part.text ? (
-        <ReasoningContent>{part.text}</ReasoningContent>
-      ) : (
-        <ReasoningPendingContent />
-      )}
-    </Reasoning>
-  );
-});
 
 /** Successful edit-tool outputs carry the before/after diff; render it as a
  * diff card instead of the raw JSON dump ToolOutput would print. */
@@ -242,8 +328,9 @@ function extractGitDiff(toolName: string, part: ToolPart): string | null {
   return typeof record.diff === "string" && record.diff !== "(no changes)" ? record.diff : null;
 }
 
-const ToolPartView = memo(
-  function ToolPartView({
+/** 单行工具调用：图标 + 动词 + 参数摘要 + 状态，展开后才是详细输入/输出。 */
+const ToolLine = memo(
+  function ToolLine({
     part,
     active,
     onToolSelect,
@@ -252,60 +339,79 @@ const ToolPartView = memo(
     active: boolean;
     onToolSelect?: (id: string) => void;
   }) {
-    const title = toolNameOf(part);
+    const title = part.type === "dynamic-tool" ? part.toolName : part.type.slice("tool-".length);
+    const display = describeTool(part);
+    const ActionIcon = ACTION_ICONS[display.action];
+    const running = RUNNING_STATES.has(part.state) || part.state === "approval-requested";
+    const failed = part.state === "output-error";
+    const [open, setOpen] = useState(failed);
+
+    // 失败的调用自动展开，让错误第一时间可见。
+    useEffect(() => {
+      if (failed) setOpen(true);
+    }, [failed]);
+
     const select = () => onToolSelect?.(part.toolCallId);
     const editDiff = extractEditDiff(title, part);
     const gitDiffText = extractGitDiff(title, part);
 
     return (
-      // The active highlight is an inset ring: a regular outer ring paints
-      // 1px outside the card, and content-visibility paint containment on
-      // Message clips it wherever the full-width card touches the edges
-      // (left/right), which read as a broken border.
-      <Tool
-        className={active ? "w-full inset-ring-1 inset-ring-ring" : "w-full"}
-      >
-        <div onClick={select}>
-          {part.type === "dynamic-tool" ? (
-            <ToolHeader
-              title={title}
-              type={part.type}
-              state={part.state}
-              toolName={part.toolName}
-            />
+      <Collapsible open={open} onOpenChange={setOpen} className="group/tool w-full">
+        {/* The active highlight is an inset ring: a regular outer ring paints
+            1px outside the row, and content-visibility paint containment on
+            Message clips it wherever the full-width row touches the edges. */}
+        <CollapsibleTrigger
+          className={cn(
+            "flex w-full cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition-colors",
+            active
+              ? "inset-ring-1 inset-ring-ring bg-accent"
+              : "hover:bg-muted/50",
+          )}
+          onClick={select}
+        >
+          <ActionIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="shrink-0">{running ? display.runningVerb : display.verb}</span>
+          {display.summary ? (
+            <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
+              {display.summary}
+            </span>
           ) : (
-            <ToolHeader title={title} type={part.type} state={part.state} />
+            <span className="min-w-0 flex-1" />
           )}
-        </div>
-        <ToolContent>
-          {"input" in part && part.input !== undefined ? (
-            <ToolInput input={part.input} />
-          ) : null}
-          {editDiff ? (
-            <div className="space-y-2">
-              <DiffCard
-                title={
-                  editDiff.changeKind === "create"
-                    ? `新建 ${editDiff.path}`
-                    : editDiff.path
-                }
-                diff={editDiff.unifiedDiff}
-                additions={editDiff.additions}
-                deletions={editDiff.deletions}
+          <StatusPill state={part.state} />
+          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/tool:rotate-90" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="outline-none">
+          <div className="ml-3 space-y-3 border-l py-1 pl-3">
+            {"input" in part && part.input !== undefined ? (
+              <ToolInput input={part.input} />
+            ) : null}
+            {editDiff ? (
+              <div className="space-y-2">
+                <DiffCard
+                  title={
+                    editDiff.changeKind === "create"
+                      ? `新建 ${editDiff.path}`
+                      : editDiff.path
+                  }
+                  diff={editDiff.unifiedDiff}
+                  additions={editDiff.additions}
+                  deletions={editDiff.deletions}
+                />
+              </div>
+            ) : null}
+            {gitDiffText ? (
+              <DiffCard title="git diff" diff={gitDiffText} defaultOpen={false} />
+            ) : null}
+            {editDiff ? null : (
+              <ToolOutput
+                output={"output" in part ? part.output : undefined}
+                errorText={"errorText" in part ? part.errorText : undefined}
               />
-            </div>
-          ) : null}
-          {gitDiffText ? (
-            <DiffCard title="git diff" diff={gitDiffText} defaultOpen={false} />
-          ) : null}
-          {editDiff ? null : (
-            <ToolOutput
-              output={"output" in part ? part.output : undefined}
-              errorText={"errorText" in part ? part.errorText : undefined}
-            />
-          )}
-        </ToolContent>
-      </Tool>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     );
   },
   (prev, next) =>
@@ -313,6 +419,126 @@ const ToolPartView = memo(
     prev.active === next.active &&
     prev.onToolSelect === next.onToolSelect,
 );
+
+/** 一段活动（若干思考 + 工具调用）的分组折叠头：
+ * 进行中显示实时计时与当前动作的一行摘要，结束后收起为
+ * “已处理 · N 个步骤”。 */
+const ActivityGroup = memo(function ActivityGroup({
+  items,
+  isActive,
+  selectedToolId,
+  onToolSelect,
+}: {
+  items: ActivityItem[];
+  isActive: boolean;
+  selectedToolId?: string;
+  onToolSelect?: (id: string) => void;
+}) {
+  // 流式期间默认展开，让每个调用按行出现；结束后自动收起。
+  // 手动开合不受 isActive 翻转影响。
+  const [open, setOpen] = useState(isActive);
+  const wasActiveRef = useRef(isActive);
+
+  useEffect(() => {
+    if (wasActiveRef.current !== isActive) {
+      setOpen(isActive);
+      wasActiveRef.current = isActive;
+    }
+  }, [isActive]);
+
+  // 从右侧面板选中本组内的工具时，展开定位到它。
+  const containsSelected =
+    selectedToolId !== undefined &&
+    items.some((item) => item.kind === "tool" && item.part.toolCallId === selectedToolId);
+  useEffect(() => {
+    if (containsSelected) setOpen(true);
+  }, [containsSelected]);
+
+  // 处理中的实时计时。
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!isActive) return;
+    setElapsed(0);
+    const startedAt = Date.now();
+    const id = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [isActive]);
+
+  const lastItem = items[items.length - 1];
+  const thinkingNow =
+    isActive && lastItem.kind === "thinking" && lastItem.part.state === "streaming";
+  const tail = isActive && !open && lastItem ? activityItemSummary(lastItem) : "";
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="group/activity w-full">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+        <SparklesIcon className="size-3.5 shrink-0" aria-hidden />
+        {isActive ? (
+          <Shimmer as="span" duration={1.6}>
+            {`${thinkingNow ? "思考中" : "处理中"}${elapsed > 0 ? ` ${elapsed}s` : ""}`}
+          </Shimmer>
+        ) : (
+          <span className="shrink-0">已处理 · {items.length} 个步骤</span>
+        )}
+        {tail ? (
+          <span className="min-w-0 flex-1 truncate" aria-hidden>
+            {tail}
+          </span>
+        ) : null}
+        <ChevronRightIcon className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]/activity:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-1.5 outline-none data-[state=closed]:hidden">
+        {items.map((item, index) =>
+          item.kind === "tool" ? (
+            <ToolLine
+              key={item.part.toolCallId}
+              part={item.part}
+              active={selectedToolId === item.part.toolCallId}
+              onToolSelect={onToolSelect}
+            />
+          ) : (
+            <ThinkingLine
+              key={`thinking-${index}`}
+              part={item.part}
+              streaming={isActive && index === items.length - 1 && item.part.state === "streaming"}
+            />
+          ),
+        )}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+});
+
+function activityItemSummary(item: ActivityItem): string {
+  if (item.kind === "thinking") {
+    return lastThinkingLine(item.part.text ?? "");
+  }
+  const display = describeTool(item.part);
+  const running = RUNNING_STATES.has(item.part.state);
+  const verb = running ? display.runningVerb : display.verb;
+  return display.summary ? `${verb} ${display.summary}` : verb;
+}
+
+function FilePartView({ part }: { part: FileUIPart }) {
+  if (part.mediaType.startsWith("image/")) {
+    return (
+      <img
+        src={part.url}
+        alt={part.filename ?? "附件"}
+        className="max-h-40 rounded-md border"
+      />
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs text-muted-foreground">
+      <PaperclipIcon className="size-3" />
+      {part.filename ?? part.mediaType}
+    </span>
+  );
+}
 
 type DataPart = ChatUIMessage["parts"][number];
 
@@ -362,3 +588,16 @@ function SystemNote({ icon, children }: { icon?: ReactNode; children: ReactNode 
     </div>
   );
 }
+
+/** Historical messages keep their object identity across streaming updates and
+ * polls, so this comparator makes per-chunk re-renders skip every message
+ * except the one actively streaming. Long conversations stay interactive. */
+export const MessageView = memo(
+  MessageViewBase,
+  (prev, next) =>
+    prev.message === next.message &&
+    prev.isStreaming === next.isStreaming &&
+    prev.selectedToolId === next.selectedToolId &&
+    prev.onToolSelect === next.onToolSelect,
+);
+MessageView.displayName = "MessageView";

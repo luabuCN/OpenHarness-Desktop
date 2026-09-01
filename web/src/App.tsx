@@ -4,6 +4,7 @@ import { DefaultChatTransport } from "ai";
 import {
   apiFetch,
   API_URL,
+  isReasoningEffort,
   listConversationRuns,
   listConversationTasks,
   listAgents,
@@ -16,27 +17,39 @@ import {
   type PermissionMode,
   type ProjectInfo,
   type ProviderInfo,
+  type ReasoningEffort,
   type RunInfo,
   type SessionSummary,
   type AgentTaskInfo,
   type AgentInfo,
 } from "./api";
-import type { ThinkingMode } from "./api";
-import { ChatPane } from "./components/ChatPane";
+import type { ChatUIMessage } from "./lib/chat-utils";
+import { ChatPane, type TurnOutcomeNote } from "./components/ChatPane";
 import { defaultModelSelection } from "./components/ModelSelector";
 import { RightPanel, type RightTab } from "./components/RightPanel";
 import { AppSidebar } from "./components/AppSidebar";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
-import type { ChatUIMessage } from "./lib/chat-utils";
+import { lastAssistantHasText } from "./lib/chat-utils";
 
 const SESSION_KEY = "openharness.sessionId";
 const THINKING_MODE_KEY = "openharness.thinkingMode";
+const REASONING_EFFORT_KEY = "openharness.reasoningEffort";
+
+/** 推理等级持久化：新键优先；旧 deep 设置迁移为 medium。 */
+function loadReasoningEffort(): ReasoningEffort {
+  const storedEffort = localStorage.getItem(REASONING_EFFORT_KEY);
+  if (isReasoningEffort(storedEffort)) return storedEffort;
+  if (localStorage.getItem(THINKING_MODE_KEY) === "deep") return "medium";
+  return "off";
+}
 const PERMISSION_MODE_KEY = "openharness.permissionMode";
 const AGENT_KEY = "openharness.agentId";
 const PROJECT_KEY = "openharness.projectId";
-const PANEL_WIDTH_MIN = 280;
-const PANEL_WIDTH_DEFAULT = 400;
+// 标签栏（文件/任务/变更/Git/工具结果/用量）的最小内容宽度实测约 443px，
+// 最小宽度取 450 保证六个标签全部可见、无需横向滚动。
+const PANEL_WIDTH_MIN = 450;
+const PANEL_WIDTH_DEFAULT = 460;
 
 /** Stable identity across renders so memoized RightPanel skips work on tabs
  * that do not read the transcript (files/tasks/changes/git). */
@@ -53,7 +66,7 @@ interface SessionViewProps {
   requestSelection: ModelSelection | null;
   displaySelection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
-  thinkingMode: ThinkingMode;
+  reasoningEffort: ReasoningEffort;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
   agentId?: string;
@@ -64,7 +77,7 @@ interface SessionViewProps {
   onProjectCreated: () => void;
   initialMessages: ChatUIMessage[];
   onFinished: () => void;
-  onThinkingModeChange: (mode: ThinkingMode) => void;
+  onReasoningEffortChange: (effort: ReasoningEffort) => void;
   panelOpen: boolean;
   onPanelOpenChange: (open: boolean) => void;
 }
@@ -76,7 +89,7 @@ function SessionView({
   requestSelection,
   displaySelection,
   onSelectionChange,
-  thinkingMode,
+  reasoningEffort,
   permissionMode,
   onPermissionModeChange,
   agentId,
@@ -87,14 +100,14 @@ function SessionView({
   onProjectCreated,
   initialMessages,
   onFinished,
-  onThinkingModeChange,
+  onReasoningEffortChange,
   panelOpen,
   onPanelOpenChange,
 }: SessionViewProps) {
   const [tab, setTab] = useState<RightTab>("files");
   const [selectedToolId, setSelectedToolId] = useState<string>();
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH_DEFAULT);
-  const thinkingModeRef = useRef(thinkingMode);
+  const reasoningEffortRef = useRef(reasoningEffort);
   const permissionModeRef = useRef(permissionMode);
   const agentIdRef = useRef(agentId);
   const projectIdRef = useRef(projectId);
@@ -103,8 +116,8 @@ function SessionView({
   const runsSignatureRef = useRef("");
 
   useEffect(() => {
-    thinkingModeRef.current = thinkingMode;
-  }, [thinkingMode]);
+    reasoningEffortRef.current = reasoningEffort;
+  }, [reasoningEffort]);
 
   useEffect(() => {
     permissionModeRef.current = permissionMode;
@@ -143,10 +156,8 @@ function SessionView({
           body: {
             id: sessionId,
             messages,
-            thinkingMode:
-              body?.thinkingMode === "deep" || body?.thinkingMode === "fast"
-                ? body.thinkingMode
-                : thinkingModeRef.current,
+            reasoningEffort: reasoningEffortRef.current,
+            thinkingMode: reasoningEffortRef.current === "off" ? "fast" : "deep",
             permissionMode: isPermissionMode(body?.permissionMode)
               ? body.permissionMode
               : permissionModeRef.current,
@@ -239,6 +250,47 @@ function SessionView({
       .map((approval) => ({ run, approval })),
   );
 
+  // 模型目录里的上下文窗口大小，供用量页计算上下文占用。
+  const contextWindow = useMemo(() => {
+    if (!displaySelection) return undefined;
+    const provider = providers.find(
+      (candidate) => candidate.id === displaySelection.providerId,
+    );
+    const model = provider?.models.find(
+      (candidate) => candidate.id === displaySelection.modelId,
+    );
+    return model?.limit?.context;
+  }, [providers, displaySelection]);
+
+  // 最近的回合异常结束（失败/中止）且没有文字总结时，在对话流末尾补一条提示；
+  // 运行期间与正常回合不显示。刷新页面导致的中断在服务端记为 aborted，这里同样覆盖。
+  const [latestRun, setLatestRun] = useState<RunInfo | null>(null);
+  const refreshLatestRun = useCallback(() => {
+    void listConversationRuns(sessionId)
+      .then((next) => setLatestRun(next[0] ?? null))
+      .catch(() => undefined);
+  }, [sessionId]);
+
+  useEffect(() => {
+    refreshLatestRun();
+  }, [refreshLatestRun, initialMessages]);
+
+  useEffect(() => {
+    if (!busy) refreshLatestRun();
+  }, [busy, refreshLatestRun]);
+
+  const turnNote = useMemo<TurnOutcomeNote | undefined>(() => {
+    if (busy || !latestRun) return undefined;
+    if (latestRun.status !== "failed" && latestRun.status !== "aborted") return undefined;
+    if (lastAssistantHasText(chat.messages)) return undefined;
+    return latestRun.status === "failed"
+      ? {
+          kind: "failed",
+          message: `上次回合失败${latestRun.error ? `：${latestRun.error}` : "，未生成文字总结"}`,
+        }
+      : { kind: "aborted", message: "上次回合已被中止，未生成文字总结" };
+  }, [busy, latestRun, chat.messages]);
+
   const handleApprovalDecision = useCallback(
     async (runId: string, approvalId: string, action: ApprovalAction) => {
       await decideApproval(runId, approvalId, action);
@@ -312,8 +364,8 @@ function SessionView({
         providers={providers}
         displaySelection={displaySelection}
         onSelectionChange={onSelectionChange}
-        thinkingMode={thinkingMode}
-        onThinkingModeChange={onThinkingModeChange}
+        reasoningEffort={reasoningEffort}
+        onReasoningEffortChange={onReasoningEffortChange}
         permissionMode={permissionMode}
         onPermissionModeChange={onPermissionModeChange}
         agentId={agentId}
@@ -330,6 +382,7 @@ function SessionView({
         onApprovalDecision={(runId, approvalId, action) =>
           void handleApprovalDecision(runId, approvalId, action)
         }
+        turnNote={turnNote}
       />
       {panelOpen ? (
         <div
@@ -353,6 +406,7 @@ function SessionView({
           project={projects.find((candidate) => candidate.id === projectId)}
           sessionId={sessionId}
           busy={busy}
+          contextWindow={contextWindow}
         />
       ) : null}
     </>
@@ -367,8 +421,8 @@ export function App() {
   const [messages, setMessages] = useState<ChatUIMessage[]>([]);
   const [error, setError] = useState<string>();
   const [loadingSessions, setLoadingSessions] = useState(false);
-  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(() =>
-    localStorage.getItem(THINKING_MODE_KEY) === "deep" ? "deep" : "fast",
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
+    loadReasoningEffort,
   );
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
     const stored = localStorage.getItem(PERMISSION_MODE_KEY);
@@ -464,8 +518,10 @@ export function App() {
   }, [sessionId]);
 
   useEffect(() => {
-    localStorage.setItem(THINKING_MODE_KEY, thinkingMode);
-  }, [thinkingMode]);
+    localStorage.setItem(REASONING_EFFORT_KEY, reasoningEffort);
+    // 旧字段同步写一份，回滚到旧版本前端时设置不丢。
+    localStorage.setItem(THINKING_MODE_KEY, reasoningEffort === "off" ? "fast" : "deep");
+  }, [reasoningEffort]);
 
   useEffect(() => {
     localStorage.setItem(PERMISSION_MODE_KEY, permissionMode);
@@ -591,8 +647,8 @@ export function App() {
               requestSelection={modelSelection}
               displaySelection={displaySelection}
               onSelectionChange={setModelSelection}
-              thinkingMode={thinkingMode}
-              onThinkingModeChange={setThinkingMode}
+              reasoningEffort={reasoningEffort}
+              onReasoningEffortChange={setReasoningEffort}
               permissionMode={permissionMode}
               onPermissionModeChange={setPermissionMode}
               agentId={agentId}

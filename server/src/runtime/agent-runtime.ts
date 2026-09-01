@@ -22,7 +22,12 @@ import {
   toolRecordService,
   type RunContext,
 } from "./tools/index.js";
-import { THINKING_MODES, type PermissionMode, type ThinkingMode } from "./types.js";
+import {
+  THINKING_MODES,
+  type PermissionMode,
+  type ReasoningEffort,
+  type ThinkingMode,
+} from "./types.js";
 
 export interface ConversationRunContext {
   conversationId: string;
@@ -61,6 +66,7 @@ class AgentRuntimeService {
     selection?: ModelSelection,
     requestedAgentId?: string,
     permissionMode: PermissionMode = "confirm",
+    reasoningEffort?: ReasoningEffort,
   ) {
     const project = await projectDefaults(context.projectId);
     const definition = await agentConfigService.resolve(
@@ -81,7 +87,7 @@ class AgentRuntimeService {
           modelId: definition.defaultModelId,
         },
       );
-    const model = await createModel(mode, effectiveSelection);
+    const model = await createModel(mode, effectiveSelection, reasoningEffort);
     const run = await runService.start({
       conversationId: context.conversationId,
       messages,
@@ -120,12 +126,15 @@ class AgentRuntimeService {
         createSubAgent(entry, model, toolProviderRegistry.deriveContext(runContext, entry)),
       );
 
+      // 显式推理等级优先；旧客户端的 thinkingMode=deep 视为开启深度思考。
+      const deepThinking = reasoningEffort ? reasoningEffort !== "off" : mode === "deep";
+
       const agent = new Agent({
         id: definition.id,
         name: definition.name,
         description: definition.description,
         instructions:
-          mode === "deep"
+          deepThinking
             ? `${definition.instructions} Think carefully before acting; reason through edge cases and verify assumptions when useful.`
             : definition.instructions,
         model,
@@ -153,6 +162,7 @@ class AgentRuntimeService {
         sendStart: true,
         sendFinish: true,
       });
+      const turnStartedAt = Date.now();
 
       let released = false;
       let releaseOwnership!: () => void;
@@ -190,6 +200,47 @@ class AgentRuntimeService {
               .then(() => runService.appendTransition(run.id, value.type, value))
               .catch(console.error);
           }
+
+          // Turn-level token usage for the client's usage panel. Mastra's
+          // stream exposes the accumulated provider usage once streaming has
+          // ended; reading it may reject when the run aborted early, so the
+          // part is still emitted with timing-only data in that case.
+          let totalUsage: unknown;
+          try {
+            totalUsage = await mastraStream.totalUsage;
+          } catch {
+            totalUsage = undefined;
+          }
+          const usageRecord =
+            totalUsage && typeof totalUsage === "object"
+              ? (totalUsage as {
+                  inputTokens?: number;
+                  outputTokens?: number;
+                  totalTokens?: number;
+                  inputTokenDetails?: {
+                    cacheReadTokens?: number;
+                    cacheWriteTokens?: number;
+                  };
+                  outputTokenDetails?: { reasoningTokens?: number };
+                })
+              : undefined;
+          const usagePart = {
+            type: "data-oh:usage" as const,
+            id: crypto.randomUUID(),
+            data: {
+              inputTokens: usageRecord?.inputTokens ?? 0,
+              outputTokens: usageRecord?.outputTokens ?? 0,
+              totalTokens: usageRecord?.totalTokens ?? 0,
+              cacheReadTokens: usageRecord?.inputTokenDetails?.cacheReadTokens ?? 0,
+              cacheWriteTokens: usageRecord?.inputTokenDetails?.cacheWriteTokens ?? 0,
+              reasoningTokens:
+                usageRecord?.outputTokenDetails?.reasoningTokens ?? 0,
+              durationMs: Date.now() - turnStartedAt,
+              providerId: effectiveSelection?.providerId,
+              modelId: effectiveSelection?.modelId,
+            },
+          };
+          writer.write(usagePart);
         },
         onStepFinish: ({ messages: stepMessages }) =>
           runService.saveStep(

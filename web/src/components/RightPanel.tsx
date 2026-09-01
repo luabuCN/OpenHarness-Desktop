@@ -34,7 +34,11 @@ import {
 } from "@/api";
 import {
   collectToolCalls,
+  collectToolTokenUsage,
   collectUsage,
+  collectUsageSummary,
+  formatDuration,
+  formatTokenCount,
   toolNameOf,
   type ChatUIMessage,
   type ToolCallRef,
@@ -54,6 +58,8 @@ export interface RightPanelProps {
   project?: ProjectInfo | null;
   sessionId?: string;
   busy?: boolean;
+  /** 模型目录里的上下文窗口大小；未知时按 128k 兜底。 */
+  contextWindow?: number;
 }
 
 function RightPanelBase({
@@ -67,6 +73,7 @@ function RightPanelBase({
   project,
   sessionId,
   busy,
+  contextWindow,
 }: RightPanelProps) {
   return (
     <aside
@@ -78,28 +85,31 @@ function RightPanelBase({
         onValueChange={(value) => onTabChange(value as RightTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="group-data-[orientation=horizontal]/tabs:h-11 w-full shrink-0 justify-start gap-1 overflow-x-auto rounded-none border-b bg-transparent px-2">
-          <TabsTrigger value="files" className="h-8 gap-1.5 text-xs">
+        {/* 标签条保持单行紧凑：纵向禁止滚动（激活项下划线伪元素会溢出 5px），
+            横向可滚但隐藏滚动条——8px 的全局滚动条在标签栏下太笨重。
+            选中态只用淡主题色背景，不加边框和阴影。 */}
+        <TabsList className="group-data-[orientation=horizontal]/tabs:h-9 w-full shrink-0 justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none border-b bg-transparent px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <TabsTrigger value="files" className={TAB_TRIGGER_CLASS}>
             <FolderOpenIcon className="size-3.5" />
             文件
           </TabsTrigger>
-          <TabsTrigger value="tasks" className="h-8 gap-1.5 text-xs">
+          <TabsTrigger value="tasks" className={TAB_TRIGGER_CLASS}>
             <ListTodoIcon className="size-3.5" />
             任务
           </TabsTrigger>
-          <TabsTrigger value="changes" className="h-8 gap-1.5 text-xs">
+          <TabsTrigger value="changes" className={TAB_TRIGGER_CLASS}>
             <FileDiffIcon className="size-3.5" />
             变更
           </TabsTrigger>
-          <TabsTrigger value="git" className="h-8 gap-1.5 text-xs">
+          <TabsTrigger value="git" className={TAB_TRIGGER_CLASS}>
             <GitBranchIcon className="size-3.5" />
             Git
           </TabsTrigger>
-          <TabsTrigger value="tools" className="h-8 gap-1.5 text-xs">
+          <TabsTrigger value="tools" className={TAB_TRIGGER_CLASS}>
             <WrenchIcon className="size-3.5" />
             工具结果
           </TabsTrigger>
-          <TabsTrigger value="usage" className="h-8 gap-1.5 text-xs">
+          <TabsTrigger value="usage" className={TAB_TRIGGER_CLASS}>
             <BarChart3Icon className="size-3.5" />
             用量
           </TabsTrigger>
@@ -125,7 +135,7 @@ function RightPanelBase({
           />
         </TabsContent>
         <TabsContent value="usage" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
-          <UsageView messages={messages} />
+          <UsageView messages={messages} contextWindow={contextWindow} />
         </TabsContent>
       </Tabs>
     </aside>
@@ -137,6 +147,15 @@ function RightPanelBase({
  * the panel and its children skip re-rendering entirely while the agent runs. */
 export const RightPanel = memo(RightPanelBase);
 RightPanel.displayName = "RightPanel";
+
+/** 面板标签的选中态：只保留淡主题色背景与主题色文字，
+ * 覆盖掉基础样式的边框、阴影和白底。 */
+const TAB_TRIGGER_CLASS = cn(
+  "h-7 gap-1.5 px-2.5 text-xs",
+  "data-[state=active]:border-transparent data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none",
+  "dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-primary/20 dark:data-[state=active]:text-primary",
+  "group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none",
+);
 
 function EmptyNote({ text }: { text: string }) {
   return <p className="py-10 text-center text-xs text-muted-foreground">{text}</p>;
@@ -540,28 +559,237 @@ function ToolDetail({ call }: { call: ToolCallRef }) {
   );
 }
 
-function UsageView({ messages }: { messages: ChatUIMessage[] }) {
-  const stats = useMemo(() => collectUsage(messages), [messages]);
+const USAGE_DEFAULT_CONTEXT_WINDOW = 128_000;
+const USAGE_RING_RADIUS = 15;
+const USAGE_RING_CIRCUMFERENCE = 2 * Math.PI * USAGE_RING_RADIUS;
 
-  const cards = [
-    { label: "Agent 轮次", value: String(stats.turns) },
-    { label: "Agent 耗时", value: `${(stats.totalTurnMs / 1000).toFixed(1)}s` },
-    { label: "工具调用", value: String(stats.toolCalls) },
-    { label: "子 Agent", value: String(stats.subagents) },
-    { label: "用户消息", value: String(stats.userMessages) },
-    { label: "助手消息", value: String(stats.assistantMessages) },
-    { label: "上下文压缩次数", value: String(stats.compactions) },
-    { label: "被压缩的消息", value: String(stats.messagesRemoved) },
-  ];
+function positiveCount(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : 0;
+}
+
+function UsageSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="rounded-lg border p-3">
+      <h3 className="mb-2 text-xs font-medium text-muted-foreground">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function UsageRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 py-0.5 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+/** 用量页：上下文占用（环形）、窗口用量、本回合吞吐与 Provider 明细、
+ * 会话累计、工具 token 估算。参考 PI-Desktop 的 ContextUsageInspector。 */
+function UsageView({
+  messages,
+  contextWindow,
+}: {
+  messages: ChatUIMessage[];
+  contextWindow?: number;
+}) {
+  const stats = useMemo(() => collectUsage(messages), [messages]);
+  const usage = useMemo(() => collectUsageSummary(messages), [messages]);
+  const tools = useMemo(() => collectToolTokenUsage(messages), [messages]);
+
+  const safeWindow =
+    positiveCount(contextWindow) || USAGE_DEFAULT_CONTEXT_WINDOW;
+  const latest = usage.latest;
+  // 上下文占用以最近一个回合的 totalTokens 为准（服务端按整段上下文计费）。
+  const usedTokens = positiveCount(latest?.totalTokens);
+  const remainingTokens = Math.max(0, safeWindow - usedTokens);
+  const remainingRatio = 1 - Math.min(1, usedTokens / safeWindow);
+  const remainingPercent = Math.round(remainingRatio * 100);
+  const level =
+    remainingPercent <= 10 ? "critical" : remainingPercent <= 25 ? "warning" : "ok";
+  const ringColor =
+    level === "critical"
+      ? "stroke-red-500"
+      : level === "warning"
+        ? "stroke-yellow-500"
+        : "stroke-primary";
+
+  const throughput =
+    latest && latest.durationMs > 0 && latest.outputTokens > 0
+      ? Math.round(latest.outputTokens / (latest.durationMs / 1000))
+      : undefined;
+  const promptTokens =
+    positiveCount(latest?.inputTokens) + positiveCount(latest?.cacheReadTokens);
+  const cacheRate =
+    latest && promptTokens > 0
+      ? Math.round((positiveCount(latest.cacheReadTokens) / promptTokens) * 100)
+      : undefined;
+
+  if (!latest) {
+    return (
+      <EmptyNote text="完成一次对话后，这里会展示上下文占用与 token 用量。" />
+    );
+  }
 
   return (
-    <div className="grid grid-cols-2 gap-2">
-      {cards.map((card) => (
-        <div key={card.label} className="rounded-lg border p-3">
-          <p className="text-lg font-semibold">{card.value}</p>
-          <p className="text-xs text-muted-foreground">{card.label}</p>
+    <div className="space-y-3">
+      {/* 上下文剩余 + 窗口占用 */}
+      <section className="rounded-lg border p-3">
+        <div className="flex items-center gap-3">
+          <svg viewBox="0 0 36 36" className="size-16 shrink-0 -rotate-90" aria-hidden>
+            <circle
+              className="fill-none stroke-muted"
+              cx="18"
+              cy="18"
+              r={USAGE_RING_RADIUS}
+              strokeWidth="3.5"
+            />
+            <circle
+              className={`fill-none ${ringColor} transition-[stroke-dashoffset]`}
+              cx="18"
+              cy="18"
+              r={USAGE_RING_RADIUS}
+              strokeWidth="3.5"
+              strokeLinecap="round"
+              strokeDasharray={USAGE_RING_CIRCUMFERENCE}
+              strokeDashoffset={USAGE_RING_CIRCUMFERENCE * (1 - remainingRatio)}
+            />
+          </svg>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">上下文剩余</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {remainingPercent}%
+            </p>
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {formatTokenCount(remainingTokens)} token
+            </p>
+          </div>
         </div>
-      ))}
+        <div className="mt-3 space-y-1.5">
+          <div className="flex items-baseline justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">上下文窗口</span>
+            <span className="font-medium tabular-nums">
+              {formatTokenCount(usedTokens)} / {formatTokenCount(safeWindow)}
+              <span className="ml-1.5 text-muted-foreground">
+                {100 - remainingPercent}%
+              </span>
+            </span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className={`h-full rounded-full ${
+                level === "critical"
+                  ? "bg-red-500"
+                  : level === "warning"
+                    ? "bg-yellow-500"
+                    : "bg-primary"
+              }`}
+              style={{ width: `${Math.min(100, 100 - remainingPercent)}%` }}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* 本回合 */}
+      <UsageSection title="本回合">
+        <div className="grid grid-cols-2 gap-x-3">
+          <UsageRow
+            label="Token 总量"
+            value={formatTokenCount(positiveCount(latest.totalTokens))}
+          />
+          <UsageRow
+            label="输出速度"
+            value={throughput !== undefined ? `${formatTokenCount(throughput)} tok/s` : "—"}
+          />
+          <UsageRow label="耗时" value={formatDuration(latest.durationMs)} />
+          <UsageRow
+            label="模型"
+            value={<span className="truncate">{latest.modelId ?? "—"}</span>}
+          />
+        </div>
+      </UsageSection>
+
+      {/* Provider 用量明细（本回合） */}
+      <UsageSection title="Provider 用量（本回合）">
+        <div className="grid grid-cols-2 gap-x-3">
+          <UsageRow label="输入" value={formatTokenCount(positiveCount(latest.inputTokens))} />
+          <UsageRow label="输出" value={formatTokenCount(positiveCount(latest.outputTokens))} />
+          <UsageRow
+            label="缓存读取"
+            value={
+              latest.cacheReadTokens > 0
+                ? formatTokenCount(positiveCount(latest.cacheReadTokens))
+                : "—"
+            }
+          />
+          <UsageRow
+            label="缓存率"
+            value={cacheRate !== undefined ? `${cacheRate}%` : "—"}
+          />
+          <UsageRow
+            label="缓存写入"
+            value={
+              latest.cacheWriteTokens > 0
+                ? formatTokenCount(positiveCount(latest.cacheWriteTokens))
+                : "—"
+            }
+          />
+          <UsageRow
+            label="推理"
+            value={
+              latest.reasoningTokens > 0
+                ? formatTokenCount(positiveCount(latest.reasoningTokens))
+                : "—"
+            }
+          />
+        </div>
+      </UsageSection>
+
+      {/* 会话累计 */}
+      <UsageSection title="会话累计">
+        <div className="grid grid-cols-2 gap-x-3">
+          <UsageRow label="回合数" value={String(usage.totals.turns)} />
+          <UsageRow
+            label="总 Token"
+            value={formatTokenCount(usage.totals.totalTokens)}
+          />
+          <UsageRow
+            label="总耗时"
+            value={formatDuration(usage.totals.durationMs)}
+          />
+          <UsageRow label="总输入" value={formatTokenCount(usage.totals.inputTokens)} />
+          <UsageRow label="总输出" value={formatTokenCount(usage.totals.outputTokens)} />
+          <UsageRow label="工具调用" value={String(stats.toolCalls)} />
+          <UsageRow label="用户消息" value={String(stats.userMessages)} />
+          <UsageRow label="助手消息" value={String(stats.assistantMessages)} />
+        </div>
+      </UsageSection>
+
+      {/* 工具 token 估算（序列化长度 / 4） */}
+      <UsageSection title={`工具调用（估算 · ${tools.length} 种）`}>
+        {tools.length === 0 ? (
+          <p className="text-xs text-muted-foreground">暂无工具调用</p>
+        ) : (
+          <ul className="space-y-1">
+            {tools.map((tool) => (
+              <li
+                key={tool.toolName}
+                className="flex items-baseline justify-between gap-2 text-xs"
+              >
+                <span className="min-w-0 truncate font-mono text-muted-foreground">
+                  {tool.toolName}
+                </span>
+                <span className="shrink-0 tabular-nums">
+                  {tool.callCount} 次 · ~{formatTokenCount(tool.totalTokens)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </UsageSection>
     </div>
   );
 }

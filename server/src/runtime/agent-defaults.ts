@@ -24,7 +24,9 @@ const baseInstructions =
   "persistent task list, and mark each task in_progress before starting it. Use " +
   "dependencies when order matters. Mark completed only after implementation and " +
   "verification succeed; otherwise keep it in_progress and explain the blocker. " +
-  "Do not claim to have changed files unless a tool call succeeded.";
+  "Do not claim to have changed files unless a tool call succeeded. " +
+  "Always end the turn with a brief text summary of what you did or found; never " +
+  "finish with tool calls alone.";
 
 const exploreSubAgent: SubAgentConfig = {
   id: "explore",

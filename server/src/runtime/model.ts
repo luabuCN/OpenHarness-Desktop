@@ -4,7 +4,7 @@ import {
   resolveSelectionConfig,
   type ModelSelection,
 } from "../providers/provider-service.js";
-import { agentProfiles, type ThinkingMode } from "./types.js";
+import { agentProfiles, type ReasoningEffort, type ThinkingMode } from "./types.js";
 
 type ChatModel = ReturnType<
   ReturnType<typeof createOpenAICompatible>["languageModel"]
@@ -24,6 +24,11 @@ type ChatModel = ReturnType<
  * the transport layer so each runtime profile gets the right behavior without
  * forking the SDK.
  *
+ * Reasoning effort (off/low/medium/high) rides the same transport injection:
+ * `enable_thinking` gates thinking entirely and `reasoning_effort` selects the
+ * depth for providers that support it (ignored elsewhere, matching how the
+ * OpenAI-compatible ecosystem treats unknown body fields).
+ *
  * Base URL / API key / model id are resolved per request-epoch from the
  * saved provider configuration (same idea as aime-chat's ProvidersManager):
  * an explicit selection from the chat prompt input wins, otherwise the first
@@ -33,8 +38,9 @@ type ChatModel = ReturnType<
 async function createModelForMode(
   mode: ThinkingMode,
   selection?: ModelSelection,
+  effort?: ReasoningEffort,
 ): Promise<ChatModel> {
-  const { enableThinking } = agentProfiles[mode];
+  const enableThinking = effort ? effort !== "off" : agentProfiles[mode].enableThinking;
   const resolved = selection
     ? await resolveSelectionConfig(selection)
     : await resolveModelConfig();
@@ -49,7 +55,11 @@ async function createModelForMode(
           const body = JSON.parse(init.body) as Record<string, unknown>;
           init = {
             ...init,
-            body: JSON.stringify({ ...body, enable_thinking: enableThinking }),
+            body: JSON.stringify({
+              ...body,
+              enable_thinking: enableThinking,
+              ...(effort && effort !== "off" ? { reasoning_effort: effort } : {}),
+            }),
           };
         } catch {
           // Leave unparseable bodies untouched so the provider surfaces the error.
@@ -65,6 +75,7 @@ async function createModelForMode(
 export function createModel(
   mode: ThinkingMode,
   selection?: ModelSelection,
+  effort?: ReasoningEffort,
 ): Promise<ChatModel> {
-  return createModelForMode(mode, selection);
+  return createModelForMode(mode, selection, effort);
 }

@@ -18,6 +18,25 @@ export interface HealthInfo {
 
 export type ThinkingMode = "fast" | "deep";
 
+/** 推理等级：off 关闭，low/medium/high 映射到服务端的 reasoning_effort。 */
+export const REASONING_EFFORTS = ["off", "low", "medium", "high"] as const;
+
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  off: "关闭",
+  low: "低",
+  medium: "中",
+  high: "高",
+};
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return (
+    typeof value === "string" &&
+    REASONING_EFFORTS.includes(value as ReasoningEffort)
+  );
+}
+
 export const PERMISSION_MODES = ["confirm", "auto_edit", "full"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];

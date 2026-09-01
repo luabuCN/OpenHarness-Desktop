@@ -50,7 +50,13 @@ export function PermissionModeSelector({
         <PromptInputButton
           disabled={disabled}
           tooltip="权限模式：决定哪些操作需要确认"
-          variant={value === "confirm" ? "ghost" : "secondary"}
+          variant={
+            value === "full"
+              ? "default"
+              : value === "auto_edit"
+                ? "secondary"
+                : "ghost"
+          }
         >
           <CurrentIcon className="size-4" />
           <span>{current.label}</span>

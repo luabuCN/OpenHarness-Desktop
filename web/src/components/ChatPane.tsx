@@ -2,10 +2,12 @@ import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
 import type { ChatUIMessage } from "@/lib/chat-utils";
 import {
-  BrainIcon,
+  CircleAlertIcon,
+  InfoIcon,
   LoaderCircleIcon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
+  SparklesIcon,
 } from "lucide-react";
 import {
   Conversation,
@@ -24,14 +26,9 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
-  PromptInputButton,
 } from "@/components/ai-elements/prompt-input";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
-import {
-  Reasoning,
-  ReasoningPendingContent,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
+import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
 import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import type {
@@ -41,8 +38,8 @@ import type {
   PermissionMode,
   ProjectInfo,
   ProviderInfo,
+  ReasoningEffort,
   RunInfo,
-  ThinkingMode,
 } from "@/api";
 import { MessageView } from "./MessageView";
 import { ModelSelector } from "./ModelSelector";
@@ -57,14 +54,20 @@ const SUGGESTIONS = [
   "总结一下这个工作区的内容",
 ];
 
+/** 最近一次回合异常结束（且没有文字总结）时的提示。 */
+export interface TurnOutcomeNote {
+  kind: "failed" | "aborted";
+  message: string;
+}
+
 export interface ChatPaneProps {
   chat: UseChatHelpers<ChatUIMessage>;
   title: string;
   providers: ProviderInfo[];
   displaySelection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
-  thinkingMode: ThinkingMode;
-  onThinkingModeChange: (mode: ThinkingMode) => void;
+  reasoningEffort: ReasoningEffort;
+  onReasoningEffortChange: (effort: ReasoningEffort) => void;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
   agentId?: string;
@@ -83,6 +86,7 @@ export interface ChatPaneProps {
     approvalId: string,
     action: ApprovalAction,
   ) => void;
+  turnNote?: TurnOutcomeNote;
 }
 
 export function ChatPane({
@@ -91,8 +95,8 @@ export function ChatPane({
   providers,
   displaySelection,
   onSelectionChange,
-  thinkingMode,
-  onThinkingModeChange,
+  reasoningEffort,
+  onReasoningEffortChange,
   permissionMode,
   onPermissionModeChange,
   agentId,
@@ -107,6 +111,7 @@ export function ChatPane({
   onProjectCreated,
   pendingApprovals,
   onApprovalDecision,
+  turnNote,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
   const waiting = busy && !hasVisibleAssistantWork(chat.messages);
@@ -128,7 +133,8 @@ export function ChatPane({
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b px-4">
+      {/* 与右侧面板的标签栏（h-9）保持同一高度，顶部分隔线才对齐。 */}
+      <header className="flex h-9 shrink-0 items-center justify-between gap-3 border-b px-4">
         <div className="flex min-w-0 items-center gap-1.5">
           <SidebarPeekTrigger />
           <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
@@ -156,18 +162,18 @@ export function ChatPane({
               description="可以询问文件相关内容、粘贴图片，或直接开始新任务。"
             />
           ) : (
-            chat.messages.map((message, index) => (
+            chat.messages.map((message) => (
               <MessageView
                 key={message.id}
                 message={message}
                 isStreaming={message.id === streamingMessageId}
-                isLast={index === chat.messages.length - 1}
                 selectedToolId={selectedToolId}
                 onToolSelect={onToolSelect}
               />
             ))
           )}
-          {waiting ? <AssistantLoadingView mode={thinkingMode} /> : null}
+          {waiting ? <AssistantLoadingView effort={reasoningEffort} /> : null}
+          {!busy && turnNote ? <TurnNoteView note={turnNote} /> : null}
           {!busy && error ? <AssistantErrorView message={error} /> : null}
           {chat.messages.length === 0 ? (
             <Suggestions className="justify-center">
@@ -220,7 +226,12 @@ export function ChatPane({
                 text,
                 ...(files.length > 0 ? { files } : {}),
               }, {
-                body: { thinkingMode, agentId, projectId },
+                body: {
+                  thinkingMode: reasoningEffort === "off" ? "fast" : "deep",
+                  reasoningEffort,
+                  agentId,
+                  projectId,
+                },
               });
             }}
           >
@@ -229,36 +240,22 @@ export function ChatPane({
             </PromptInputBody>
             <PromptInputFooter>
               <PromptInputTools>
-                <PermissionModeSelector
-                  value={permissionMode}
-                  onChange={onPermissionModeChange}
-                />
                 <PromptInputActionMenu>
                   <PromptInputActionMenuTrigger tooltip="添加附件" />
                   <PromptInputActionMenuContent>
                     <PromptInputActionAddAttachments />
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
-                <PromptInputButton
-                  aria-pressed={thinkingMode === "deep"}
-                  disabled={busy}
-                  onClick={() =>
-                    onThinkingModeChange(thinkingMode === "deep" ? "fast" : "deep")
-                  }
-                  tooltip={
-                    thinkingMode === "deep"
-                      ? "深度思考已开启，点击关闭"
-                      : "回答前先进行深度思考"
-                  }
-                  variant={thinkingMode === "deep" ? "secondary" : "ghost"}
-                >
-                  <BrainIcon className="size-4" />
-                  <span>深度思考</span>
-                </PromptInputButton>
+                <PermissionModeSelector
+                  value={permissionMode}
+                  onChange={onPermissionModeChange}
+                />
                 <ModelSelector
                   providers={providers}
                   value={displaySelection}
                   onChange={onSelectionChange}
+                  effort={reasoningEffort}
+                  onEffortChange={onReasoningEffortChange}
                 />
               </PromptInputTools>
               <PromptInputSubmit
@@ -288,13 +285,14 @@ function hasVisibleAssistantWork(messages: ChatUIMessage[]): boolean {
   });
 }
 
-function AssistantLoadingView({ mode }: { mode: ThinkingMode }) {
-  if (mode === "deep") {
+function AssistantLoadingView({ effort }: { effort: ReasoningEffort }) {
+  if (effort !== "off") {
+    // 与消息流里的 ThinkingLine 保持一致的一行式占位。
     return (
-      <Reasoning isStreaming className="w-full">
-        <ReasoningTrigger />
-        <ReasoningPendingContent />
-      </Reasoning>
+      <div className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-xs text-muted-foreground">
+        <SparklesIcon className="size-3.5 shrink-0" />
+        <Shimmer as="span" duration={1.6}>思考中…</Shimmer>
+      </div>
     );
   }
 
@@ -315,6 +313,27 @@ function AssistantErrorView({ message }: { message: string }) {
   return (
     <div className="w-full rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
       {message}
+    </div>
+  );
+}
+
+/** 历史/结束后补充的回合结果提示：失败用错误色，中止用中性色。 */
+function TurnNoteView({ note }: { note: TurnOutcomeNote }) {
+  const failed = note.kind === "failed";
+  return (
+    <div
+      className={
+        failed
+          ? "flex w-full items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          : "flex w-full items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      }
+    >
+      {failed ? (
+        <CircleAlertIcon className="size-3.5 shrink-0" />
+      ) : (
+        <InfoIcon className="size-3.5 shrink-0" />
+      )}
+      <span className="min-w-0 break-words">{note.message}</span>
     </div>
   );
 }

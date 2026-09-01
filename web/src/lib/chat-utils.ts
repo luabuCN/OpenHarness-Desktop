@@ -12,11 +12,24 @@ export interface TodoItem {
   priority?: "high" | "medium" | "low";
 }
 
+export interface TurnUsagePartData {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  durationMs: number;
+  providerId?: string;
+  modelId?: string;
+}
+
 export type ChatUIMessage = UIMessage<
   unknown,
   {
     "oh:todo.updated": { todos: TodoItem[] };
     "oh:turn.done": { durationMs: number };
+    "oh:usage": TurnUsagePartData;
     "oh:subagent.start": { agentName: string; task: string };
     "oh:subagent.done": { agentName: string; durationMs: number };
     "oh:subagent.error": { agentName: string; error: string };
@@ -110,4 +123,126 @@ export function messageText(message: ChatUIMessage): string {
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
     .map((part) => part.text)
     .join("\n");
+}
+
+/** Whether the most recent assistant message carries any non-empty text part —
+ * a turn that ended with tool calls only gets a "no summary" note. */
+export function lastAssistantHasText(messages: ChatUIMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    return message.parts.some(
+      (part) => part.type === "text" && part.text.trim().length > 0,
+    );
+  }
+  return true;
+}
+
+export interface UsageSummary {
+  /** 最近一次回合的用量（上下文占用以它为准）。 */
+  latest: TurnUsagePartData | undefined;
+  /** 会话累计。 */
+  totals: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+    durationMs: number;
+    turns: number;
+  };
+}
+
+export function collectUsageSummary(messages: ChatUIMessage[]): UsageSummary {
+  const totals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    durationMs: 0,
+    turns: 0,
+  };
+  let latest: TurnUsagePartData | undefined;
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "data-oh:usage") continue;
+      latest = part.data;
+      totals.turns += 1;
+      totals.inputTokens += part.data.inputTokens;
+      totals.outputTokens += part.data.outputTokens;
+      totals.totalTokens += part.data.totalTokens;
+      totals.cacheReadTokens += part.data.cacheReadTokens;
+      totals.cacheWriteTokens += part.data.cacheWriteTokens;
+      totals.reasoningTokens += part.data.reasoningTokens;
+      totals.durationMs += part.data.durationMs;
+    }
+  }
+  return { latest, totals };
+}
+
+export interface ToolTokenSummary {
+  toolName: string;
+  callCount: number;
+  totalTokens: number;
+}
+
+/** 估算每个工具调用占用的上下文 token：序列化长度 / 4（与 PI-Desktop 同一启发式）。 */
+export function collectToolTokenUsage(
+  messages: ChatUIMessage[],
+): ToolTokenSummary[] {
+  const groups = new Map<string, ToolTokenSummary>();
+  const estimate = (value: unknown): number => {
+    let text: string;
+    if (typeof value === "string") text = value;
+    else {
+      try {
+        text = JSON.stringify(value) ?? "";
+      } catch {
+        text = String(value);
+      }
+    }
+    return Math.ceil(text.length / 4);
+  };
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (!isToolUIPart(part)) continue;
+      const name = toolNameOf(part);
+      const argumentTokens = estimate("input" in part ? part.input : undefined);
+      const resultTokens = estimate("output" in part ? part.output : undefined);
+      const existing = groups.get(name);
+      if (existing) {
+        existing.callCount += 1;
+        existing.totalTokens += argumentTokens + resultTokens;
+      } else {
+        groups.set(name, {
+          toolName: name,
+          callCount: 1,
+          totalTokens: argumentTokens + resultTokens,
+        });
+      }
+    }
+  }
+  return [...groups.values()].sort((a, b) => b.totalTokens - a.totalTokens);
+}
+
+export function formatTokenCount(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  }
+  if (value >= 10_000) return `${Math.round(value / 1000)}k`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
+export function formatDuration(ms: number): string {
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  if (minutes < 60) return `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
