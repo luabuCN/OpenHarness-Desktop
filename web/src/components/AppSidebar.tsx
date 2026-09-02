@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   ChevronDown,
-  ChevronRight,
   Folder,
+  FolderOpen,
   FolderPlus,
+  Plus,
   Settings,
   SquarePen,
   Trash2,
@@ -43,6 +44,8 @@ export interface AppSidebarProps {
   /** Selecting a session under a project also switches the project context. */
   onSelect: (id: string, projectId?: string) => void;
   onNew: () => void;
+  /** 在指定项目下新建对话（项目行右侧的 + 按钮）。 */
+  onNewInProject: (projectId: string) => void;
   onDelete: (id: string) => void;
   onProjectsChanged: () => void;
   onOpenSettings: () => void;
@@ -108,6 +111,22 @@ function ScrollableTitle({ text }: { text: string }) {
   );
 }
 
+/**
+ * 会话项左侧的运行状态点（参考 PI-Desktop）：
+ * - 后台运行中：橙色呼吸圆点
+ * - 等待审批：紫色脉冲圆点
+ * 空闲会话不显示任何点。
+ */
+function SessionStatusDot({ status }: { status?: string | null }) {
+  if (status === "waiting_approval") {
+    return <span className="oh-session-dot oh-session-dot--waiting" title="等待审批" />;
+  }
+  if (status === "running" || status === "queued") {
+    return <span className="oh-session-dot oh-session-dot--running" title="后台运行中" />;
+  }
+  return null;
+}
+
 export function AppSidebar({
   sessions,
   sessionId,
@@ -118,6 +137,7 @@ export function AppSidebar({
   onSelectProject,
   onSelect,
   onNew,
+  onNewInProject,
   onDelete,
   onProjectsChanged,
   onOpenSettings,
@@ -146,6 +166,7 @@ export function AppSidebar({
         isActive={session.id === sessionId}
         onClick={() => onSelect(session.id, projectId)}
       >
+        <SessionStatusDot status={session.activeRunStatus} />
         <ScrollableTitle text={session.title} />
       </SidebarMenuButton>
 
@@ -214,14 +235,21 @@ export function AppSidebar({
                               onClick={() => onSelectProject(project.id)}
                             >
                               {open ? (
-                                <ChevronDown className="text-muted-foreground" />
+                                <FolderOpen className="text-muted-foreground" />
                               ) : (
-                                <ChevronRight className="text-muted-foreground" />
+                                <Folder className="text-muted-foreground" />
                               )}
-                              <Folder className="text-muted-foreground" />
                               <span>{project.name}</span>
                             </SidebarMenuButton>
                           </CollapsibleTrigger>
+                          <SidebarMenuAction
+                            showOnHover
+                            className="top-1/2! -translate-y-1/2 text-muted-foreground hover:text-sidebar-accent-foreground"
+                            onClick={() => onNewInProject(project.id)}
+                            title="新建项目对话"
+                          >
+                            <Plus />
+                          </SidebarMenuAction>
                           <CollapsibleContent>
                             <div className="mt-1 ml-4 py-1">
                               {sessionList(projectSessions.grouped.get(project.id) ?? [], project.id)}

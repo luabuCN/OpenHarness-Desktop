@@ -10,6 +10,7 @@ import {
   listAgents,
   listProjects,
   listProviders,
+  abortConversation,
   decideApproval,
   isPermissionMode,
   type ApprovalAction,
@@ -36,6 +37,12 @@ import { lastAssistantHasText } from "./lib/chat-utils";
 const SESSION_KEY = "openharness.sessionId";
 const THINKING_MODE_KEY = "openharness.thinkingMode";
 const REASONING_EFFORT_KEY = "openharness.reasoningEffort";
+
+function sessionsSignature(sessions: SessionSummary[]): string {
+  return sessions
+    .map((session) => `${session.id}:${session.title}:${session.updatedAt}:${session.activeRunStatus ?? ""}`)
+    .join("|");
+}
 
 /** 推理等级持久化：新键优先；旧 deep 设置迁移为 medium。 */
 function loadReasoningEffort(): ReasoningEffort {
@@ -82,6 +89,8 @@ interface SessionViewProps {
   projects: ProjectInfo[];
   onProjectCreated: () => void;
   initialMessages: ChatUIMessage[];
+  /** 历史快照是否已加载完成；后台运行续接在快照就绪后触发。 */
+  snapshotReady: boolean;
   onFinished: () => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   panelOpen: boolean;
@@ -105,6 +114,7 @@ function SessionView({
   projects,
   onProjectCreated,
   initialMessages,
+  snapshotReady,
   onFinished,
   onReasoningEffortChange,
   panelOpen,
@@ -183,10 +193,15 @@ function SessionView({
     [sessionId, projectId, requestSelection],
   );
 
+  // 重进会话的续接开关：快照就绪后若发现进行中的运行则翻转（见下方 effect）。
+  const [resumeActive, setResumeActive] = useState(false);
+  const resumeCheckedRef = useRef(false);
+
   const chat: UseChatHelpers<ChatUIMessage> = useChat<ChatUIMessage>({
     id: sessionId,
     messages: initialMessages,
     transport,
+    resume: resumeActive,
     // Coalesce stream chunks into ~20 renders/sec. Without this every token
     // delta re-renders the whole streaming message (the server accumulates an
     // entire agent run into one message), which froze long answers.
@@ -201,6 +216,37 @@ function SessionView({
   useEffect(() => {
     setChatMessages(initialMessages);
   }, [initialMessages, setChatMessages]);
+
+  // 重进会话时续接仍在后台运行的回合：快照就绪后查询一次运行列表，
+  // 存在进行中的运行就翻转 resume，useChat 通过 GET /api/chat/:id/stream
+  // 回放缓冲并接管直播流。每个挂载只尝试一次，且要求本地空闲——resume
+  // 会先中止当前活跃响应，不能打断刚发出的新回合。
+  const chatStatus = chat.status;
+  useEffect(() => {
+    if (!snapshotReady || resumeCheckedRef.current) return;
+    resumeCheckedRef.current = true;
+    if (chatStatus !== "ready") return;
+    void listConversationRuns(sessionId)
+      .then((runs) => {
+        const active = runs.some(
+          (run) =>
+            run.status === "running" ||
+            run.status === "waiting_approval" ||
+            run.status === "queued",
+        );
+        if (active) setResumeActive(true);
+      })
+      .catch(() => undefined);
+  }, [snapshotReady, sessionId, chatStatus]);
+
+  // 停止按钮：运行已在服务端与连接解耦，本地断流不再能中止它，必须先调
+  // 中止 API，再断开本地流视图。
+  const chatStop = chat.stop;
+  const handleStop = useCallback(() => {
+    void abortConversation(sessionId)
+      .catch(() => undefined)
+      .finally(() => chatStop());
+  }, [sessionId, chatStop]);
 
   const busy = chat.status === "submitted" || chat.status === "streaming";
 
@@ -445,6 +491,7 @@ function SessionView({
         }
         turnNote={turnNote}
         onOpenLink={handleOpenLink}
+        onStop={handleStop}
       />
       {panelOpen ? (
         <div
@@ -482,6 +529,9 @@ export function App() {
   );
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [messages, setMessages] = useState<ChatUIMessage[]>([]);
+  // 当前会话的历史快照是否已从服务端加载完成；重进会话时只有在快照就绪
+  // 之后才尝试续接后台运行，避免回放消息被迟到的快照整体覆盖。
+  const [snapshotReady, setSnapshotReady] = useState(false);
   const [error, setError] = useState<string>();
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
@@ -539,17 +589,36 @@ export function App() {
     [isValidSelection, providers],
   );
 
+  // 会话列表内容签名：静默轮询用它跳过无变化的重渲染。
+  const sessionsSignatureRef = useRef("");
+
   const refreshSessions = useCallback(async () => {
     setLoadingSessions(true);
     try {
       const data = await apiFetch<{ sessions: SessionSummary[] }>("/api/sessions");
       setSessions(data.sessions);
+      sessionsSignatureRef.current = sessionsSignature(data.sessions);
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法连接本地服务");
     } finally {
       setLoadingSessions(false);
     }
+  }, []);
+  // 后台运行状态轮询：会话在后台执行时，侧栏状态点与排序靠这里的静默
+  // 刷新驱动（不触发加载态）。内容无变化时跳过 setState，避免整树重渲染。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void apiFetch<{ sessions: SessionSummary[] }>("/api/sessions")
+        .then((data) => {
+          const signature = sessionsSignature(data.sessions);
+          if (signature === sessionsSignatureRef.current) return;
+          sessionsSignatureRef.current = signature;
+          setSessions(data.sessions);
+        })
+        .catch(() => undefined);
+    }, 3_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -605,12 +674,16 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    setSnapshotReady(false);
 
     apiFetch<{ messages: ChatUIMessage[] }>(`/api/sessions/${sessionId}`)
       .then((data) => {
         if (!cancelled) setMessages(data.messages);
       })
-      .catch(() => setMessages([]));
+      .catch(() => setMessages([]))
+      .finally(() => {
+        if (!cancelled) setSnapshotReady(true);
+      });
     void refreshSessions();
 
     return () => {
@@ -645,15 +718,23 @@ export function App() {
   const title = sessions.find((session) => session.id === sessionId)?.title ?? "新建对话";
 
   function selectSession(id: string, nextProjectId?: string) {
-    // Opening a conversation nested under a project also switches the run
-    // context to that project; plain "最近" items leave the context alone.
-    if (nextProjectId !== undefined) setProjectId(nextProjectId);
+    // 项目分组里的会话把运行上下文切到对应项目；"最近"里的会话一律回到
+    // 默认工作区，避免之前选中的项目上下文残留到不相关的对话。
+    setProjectId(nextProjectId);
     if (id === sessionId) return;
     setSessionId(id);
     setMessages([]);
   }
 
+  // 顶部"新对话"永远开在默认工作区；项目专属的新对话走项目行的 + 按钮。
   function startNewSession() {
+    setProjectId(undefined);
+    setSessionId(createSessionId());
+    setMessages([]);
+  }
+
+  function startProjectSession(projectId: string) {
+    setProjectId(projectId);
     setSessionId(createSessionId());
     setMessages([]);
   }
@@ -664,8 +745,14 @@ export function App() {
       (session) => (session.projectId ?? undefined) === nextProjectId,
     );
     if (inScope.some((session) => session.id === sessionId)) return;
-    if (inScope.length > 0) selectSession(inScope[0].id);
-    else startNewSession();
+    if (inScope.length > 0) {
+      setSessionId(inScope[0].id);
+      setMessages([]);
+    } else if (nextProjectId) {
+      startProjectSession(nextProjectId);
+    } else {
+      startNewSession();
+    }
   }
 
   async function deleteSession(id: string) {
@@ -686,6 +773,7 @@ export function App() {
         onSelectProject={handleSelectProject}
         onSelect={selectSession}
         onNew={startNewSession}
+        onNewInProject={startProjectSession}
         onDelete={(id) => void deleteSession(id)}
         onProjectsChanged={refreshProjects}
         onOpenSettings={() => setView("settings")}
@@ -721,6 +809,7 @@ export function App() {
               onProjectChange={setProjectId}
               onProjectCreated={refreshProjects}
               initialMessages={initialMessages}
+              snapshotReady={snapshotReady}
               onFinished={() => void refreshSessions()}
               panelOpen={panelOpen}
               onPanelOpenChange={setPanelOpen}

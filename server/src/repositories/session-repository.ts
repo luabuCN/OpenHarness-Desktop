@@ -32,10 +32,27 @@ export const sessionRepository = {
   },
 
   async list() {
-    return prisma.conversation.findMany({
+    // 附带每个会话当前进行中的运行状态，侧栏据此渲染"后台运行中"状态点。
+    const conversations = await prisma.conversation.findMany({
       orderBy: { updatedAt: "desc" },
-      select: { id: true, title: true, projectId: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        title: true,
+        projectId: true,
+        createdAt: true,
+        updatedAt: true,
+        runs: {
+          where: { status: { in: ["queued", "running", "waiting_approval"] } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { status: true },
+        },
+      },
     });
+    return conversations.map(({ runs, ...session }) => ({
+      ...session,
+      activeRunStatus: runs[0]?.status ?? null,
+    }));
   },
 
   async findWithUIMessages(id: string) {

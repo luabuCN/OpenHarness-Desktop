@@ -31,7 +31,7 @@ pnpm dev
 
 开发模式下会同时启动：
 
-- Hono API: `http://127.0.0.1:8787`
+- Hono API: `http://127.0.0.1:8878`
 - Vite Web: `http://localhost:5173`
 - Tauri window
 

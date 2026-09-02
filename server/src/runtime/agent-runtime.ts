@@ -16,6 +16,7 @@ import type { ChatUIMessage } from "../chat-types.js";
 import { agentConfigService, type SubAgentConfig } from "./agents.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
+import { runHub } from "./run-hub.js";
 import {
   parseToolPermissionMap,
   toolProviderRegistry,
@@ -61,7 +62,6 @@ class AgentRuntimeService {
   async stream(
     mode: ThinkingMode,
     messages: ChatUIMessage[],
-    requestSignal: AbortSignal,
     context: ConversationRunContext,
     selection?: ModelSelection,
     requestedAgentId?: string,
@@ -88,6 +88,18 @@ class AgentRuntimeService {
         },
       );
     const model = await createModel(mode, effectiveSelection, reasoningEffort);
+
+    // 同一会话同一时刻只允许一个进行中的运行。数据库状态为进行中、但
+    // 广播中心里已无对应条目的，说明是服务重启遗留的僵尸记录，就地收尾
+    // 后放行新回合。
+    const existingRun = await runService.activeRun(context.conversationId);
+    if (existingRun) {
+      if (runHub.has(existingRun.id)) {
+        throw new Error("该对话已有正在进行的回合，请等待完成或先停止");
+      }
+      await runService.finish(existingRun.id, "failed", "服务重启导致运行中断");
+    }
+
     const run = await runService.start({
       conversationId: context.conversationId,
       messages,
@@ -97,7 +109,7 @@ class AgentRuntimeService {
       selection: effectiveSelection,
       agentId: definition.id,
     });
-    const activeRun = runService.registerAbortSource(run.id, requestSignal);
+    const activeRun = runService.registerAbortSource(run.id);
 
     try {
       // Global permission mode sets the baseline; read-only agents cannot mutate;
@@ -257,15 +269,17 @@ class AgentRuntimeService {
             stepMessages as ChatUIMessage[],
             persistedTitle,
           ),
-        onFinish: ({ messages: finalMessages, isAborted }) =>
-          Promise.all([
-            runService.saveStep(
-              context.conversationId,
-              finalMessages as ChatUIMessage[],
-              persistedTitle,
-            ),
-            runService.finish(run.id, isAborted ? "aborted" : "completed"),
-          ]).then(() => releaseOwnership()),
+        onFinish: async ({ messages: finalMessages, isAborted }) => {
+          // 先落盘消息、再结束运行状态：保证客户端一旦观察到运行不再是
+          // 进行中，快照里就一定已包含最终消息（重连判定依赖这一顺序）。
+          await runService.saveStep(
+            context.conversationId,
+            finalMessages as ChatUIMessage[],
+            persistedTitle,
+          );
+          await runService.finish(run.id, isAborted ? "aborted" : "completed");
+          releaseOwnership();
+        },
         onError: (error) => {
           console.error(error);
           return "The local agent run failed.";
@@ -279,8 +293,30 @@ class AgentRuntimeService {
         setTimeout(releaseOwnership, 1_000);
       }, { once: true });
 
+      // 后台运行：把 UI 流一分为二。clientBranch 给当前 HTTP 客户端，
+      // 断开即止、不影响运行；pumpBranch 由常驻泵消费——它驱动
+      // onStepFinish/onFinish 的持久化（这些回调只在流被读取时触发），
+      // 并把每个 chunk 写入 runHub，供切换回来/刷新后的客户端通过
+      // GET /api/chat/:conversationId/stream 重连回放。
+      runHub.open(run.id);
+      const [clientBranch, pumpBranch] = uiStream.tee();
+      void (async () => {
+        const reader = pumpBranch.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            runHub.publish(run.id, value);
+          }
+        } catch (error) {
+          console.error("run stream pump failed", error);
+        } finally {
+          runHub.close(run.id);
+        }
+      })();
+
       return createUIMessageStreamResponse({
-        stream: uiStream,
+        stream: clientBranch,
         headers: {
           "cache-control": "no-cache, no-transform",
           connection: "keep-alive",

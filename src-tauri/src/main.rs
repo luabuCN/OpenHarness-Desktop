@@ -25,7 +25,7 @@ fn main() {
             let port = std::env::var("OPENHARNESS_PORT")
                 .ok()
                 .and_then(|value| value.parse::<u16>().ok())
-                .unwrap_or(8787);
+                .unwrap_or(8878);
 
             // In `pnpm dev` the tsx dev server already owns the port; spawning the
             // sidecar then would crash with EADDRINUSE. Skip it and reuse the

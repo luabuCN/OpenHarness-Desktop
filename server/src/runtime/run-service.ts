@@ -125,7 +125,13 @@ class ThreadRunService {
     });
   }
 
-  registerAbortSource(runId: string, externalSignal: AbortSignal) {
+  /**
+   * 为运行建立独立的中止控制器。外部信号（HTTP 请求断开）不再传入：
+   * 运行与客户端连接解耦，切换会话/刷新页面只断开视图，运行转入后台；
+   * 只有显式调用 abort()（停止按钮 → POST /api/runs/conversations/:id/abort）
+   * 才会真正中止。
+   */
+  registerAbortSource(runId: string) {
     const controller = new AbortController();
     const approvals = new InteractiveApprovalBridge(runId, controller.signal);
     const handle: ActiveRunHandle = {
@@ -134,17 +140,10 @@ class ThreadRunService {
     };
     this.activeRuns.set(runId, handle);
 
-    const onAbort = () => {
-      void this.finish(runId, "aborted").catch(console.error);
-    };
-    if (externalSignal.aborted) onAbort();
-    else externalSignal.addEventListener("abort", onAbort, { once: true });
-
     return {
       signal: controller.signal,
       approvals,
       cleanup: () => {
-        externalSignal.removeEventListener("abort", onAbort);
         this.activeRuns.delete(runId);
       },
     };
@@ -225,6 +224,14 @@ class ThreadRunService {
 
   abort(runId: string) {
     return this.activeRuns.get(runId)?.abort();
+  }
+
+  /** 会话当前是否有进行中的运行（queued/running/waiting_approval）。 */
+  activeRun(conversationId: string) {
+    return prisma.threadRun.findFirst({
+      where: { conversationId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+      orderBy: { createdAt: "desc" },
+    });
   }
 
   listForConversation(conversationId: string) {

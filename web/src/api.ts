@@ -1,4 +1,7 @@
-export const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8787";
+export const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8878";
+
+/** 会话当前进行中运行的状态；null 表示空闲（用于侧栏后台运行状态点）。 */
+export type ActiveRunStatus = "queued" | "running" | "waiting_approval";
 
 export interface SessionSummary {
   id: string;
@@ -6,6 +9,7 @@ export interface SessionSummary {
   projectId?: string | null;
   createdAt: string;
   updatedAt: string;
+  activeRunStatus?: ActiveRunStatus | null;
 }
 
 export interface HealthInfo {
@@ -312,6 +316,13 @@ export function deleteProject(id: string): Promise<void> {
 export function listConversationRuns(conversationId: string): Promise<RunInfo[]> {
   return apiFetch<{ runs: RunInfo[] }>(`/api/runs/conversations/${conversationId}`)
     .then((data) => data.runs);
+}
+
+/** 停止会话当前进行中的后台运行（服务端中止 agent 循环）。 */
+export function abortConversation(conversationId: string): Promise<void> {
+  return apiFetch(`/api/runs/conversations/${conversationId}/abort`, {
+    method: "POST",
+  }).then(() => undefined);
 }
 
 export function listConversationTasks(conversationId: string): Promise<AgentTaskInfo[]> {

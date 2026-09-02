@@ -92,6 +92,8 @@ export interface ChatPaneProps {
   turnNote?: TurnOutcomeNote;
   /** 聊天内容里的链接点击后改在内置浏览器面板中打开。 */
   onOpenLink?: (url: string) => void;
+  /** 停止按钮：运行与连接解耦后需要走服务端中止 API；缺省退回本地断流。 */
+  onStop?: () => void;
 }
 
 export function ChatPane({
@@ -118,6 +120,7 @@ export function ChatPane({
   onApprovalDecision,
   turnNote,
   onOpenLink,
+  onStop,
 }: ChatPaneProps) {
   const busy = chat.status === "submitted" || chat.status === "streaming";
   const waiting = busy && !hasVisibleAssistantWork(chat.messages);
@@ -232,16 +235,6 @@ export function ChatPane({
               />
             </div>
           ) : null}
-          <div className="relative">
-            <div className="absolute -top-10 left-0 z-10 flex h-8 items-center">
-              <AgentSelector value={agentId} onChange={onAgentChange} />
-              <ProjectSelector
-                projects={projects}
-                projectId={projectId}
-                onSelectProject={onProjectChange}
-                onChanged={onProjectCreated}
-              />
-            </div>
           <PromptInput
             className="w-full rounded-xl border bg-card shadow-sm"
             onSubmit={({ text, files }) => {
@@ -270,6 +263,13 @@ export function ChatPane({
                     <PromptInputActionAddAttachments />
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
+                <AgentSelector value={agentId} onChange={onAgentChange} />
+                <ProjectSelector
+                  projects={projects}
+                  projectId={projectId}
+                  onSelectProject={onProjectChange}
+                  onChanged={onProjectCreated}
+                />
                 <PermissionModeSelector
                   value={permissionMode}
                   onChange={onPermissionModeChange}
@@ -284,12 +284,11 @@ export function ChatPane({
               </PromptInputTools>
               <PromptInputSubmit
                 status={chat.status}
-                onStop={() => void chat.stop()}
+                onStop={onStop ?? (() => void chat.stop())}
                 className="size-8 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
               />
             </PromptInputFooter>
           </PromptInput>
-          </div>
         </div>
       </div>
     </section>
