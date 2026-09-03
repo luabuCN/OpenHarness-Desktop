@@ -40,11 +40,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { ImageLightbox } from "@/components/ImageLightbox";
 import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
 import {
   CornerDownLeftIcon,
   ImageIcon,
   Monitor,
+  PaperclipIcon,
   PlusIcon,
   SquareIcon,
   XIcon,
@@ -179,7 +181,7 @@ const captureScreenshot = async (): Promise<File | null> => {
 // ============================================================================
 
 export interface AttachmentsContext {
-  files: (FileUIPart & { id: string })[];
+  files: (FileUIPart & { id: string; size?: number })[];
   add: (files: File[] | FileList) => void;
   remove: (id: string) => void;
   clear: () => void;
@@ -255,7 +257,7 @@ export const PromptInputProvider = ({
 
   // ----- attachments state (global when wrapped)
   const [attachmentFiles, setAttachmentFiles] = useState<
-    (FileUIPart & { id: string })[]
+    (FileUIPart & { id: string; size?: number })[]
   >([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // oxlint-disable-next-line eslint(no-empty-function)
@@ -273,6 +275,7 @@ export const PromptInputProvider = ({
         filename: file.name,
         id: nanoid(),
         mediaType: file.type,
+        size: file.size,
         type: "file" as const,
         url: URL.createObjectURL(file),
       })),
@@ -533,7 +536,7 @@ export const PromptInput = ({
   const formRef = useRef<HTMLFormElement | null>(null);
 
   // ----- Local attachments (only used when no provider)
-  const [items, setItems] = useState<(FileUIPart & { id: string })[]>([]);
+  const [items, setItems] = useState<(FileUIPart & { id: string; size?: number })[]>([]);
   const files = usingProvider ? controller.attachments.files : items;
 
   // ----- Local referenced sources (always local to PromptInput)
@@ -592,7 +595,7 @@ export const PromptInput = ({
       if (accepted.length > 0 && sized.length === 0) {
         onError?.({
           code: "max_file_size",
-          message: "All files exceed the maximum size.",
+          message: "文件超过大小限制，未添加。",
         });
         return;
       }
@@ -607,15 +610,16 @@ export const PromptInput = ({
         if (typeof capacity === "number" && sized.length > capacity) {
           onError?.({
             code: "max_files",
-            message: "Too many files. Some were not added.",
+            message: "附件数量超限，部分文件未添加。",
           });
         }
-        const next: (FileUIPart & { id: string })[] = [];
+        const next: (FileUIPart & { id: string; size?: number })[] = [];
         for (const file of capped) {
           next.push({
             filename: file.name,
             id: nanoid(),
             mediaType: file.type,
+            size: file.size,
             type: "file",
             url: URL.createObjectURL(file),
           });
@@ -656,7 +660,7 @@ export const PromptInput = ({
       if (accepted.length > 0 && sized.length === 0) {
         onError?.({
           code: "max_file_size",
-          message: "All files exceed the maximum size.",
+          message: "文件超过大小限制，未添加。",
         });
         return;
       }
@@ -671,7 +675,7 @@ export const PromptInput = ({
       if (typeof capacity === "number" && sized.length > capacity) {
         onError?.({
           code: "max_files",
-          message: "Too many files. Some were not added.",
+          message: "附件数量超限，部分文件未添加。",
         });
       }
 
@@ -948,6 +952,89 @@ export const PromptInputBody = ({
 }: PromptInputBodyProps) => (
   <div className={cn("contents", className)} {...props} />
 );
+
+export type PromptInputAttachmentsProps = HTMLAttributes<HTMLDivElement>;
+
+/** 附件芯片里的人类可读文件大小。 */
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 输入框内已暂存附件的预览行：图片显示缩略图（点击放大预览）、其余显示
+ * 文件芯片，悬停可移除。渲染在 PromptInput 内部（依赖附件上下文）。
+ * 容器占满整行，否则会被 InputGroup 的 items-center 水平居中。 */
+export const PromptInputAttachments = ({
+  className,
+  ...props
+}: PromptInputAttachmentsProps) => {
+  const attachments = usePromptInputAttachments();
+  const [preview, setPreview] = useState<{ url: string; filename?: string } | null>(
+    null,
+  );
+  if (attachments.files.length === 0) return null;
+
+  return (
+    <div
+      className={cn("flex w-full flex-wrap gap-2 px-1 pt-2", className)}
+      {...props}
+    >
+      {attachments.files.map((file) => (
+        <div key={file.id} className="group/attachment relative">
+          {file.mediaType.startsWith("image/") ? (
+            <button
+              type="button"
+              title="点击预览"
+              className="block cursor-zoom-in rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() =>
+                setPreview({ url: file.url, filename: file.filename })
+              }
+            >
+              <img
+                src={file.url}
+                alt={file.filename ?? "附件图片"}
+                className="h-16 w-16 rounded-md border object-cover"
+              />
+            </button>
+          ) : (
+            <span className="flex h-16 max-w-52 flex-col justify-center gap-0.5 rounded-md border px-2.5 py-1.5 text-xs">
+              <span className="flex min-w-0 items-center gap-1.5 text-foreground">
+                <PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate" title={file.filename ?? file.mediaType}>
+                  {file.filename ?? file.mediaType}
+                </span>
+              </span>
+              {typeof file.size === "number" ? (
+                <span className="pl-5 text-[10px] text-muted-foreground">
+                  {formatAttachmentSize(file.size)}
+                </span>
+              ) : null}
+            </span>
+          )}
+          <button
+            type="button"
+            aria-label={`移除附件 ${file.filename ?? ""}`}
+            className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full border bg-background shadow-sm transition-opacity hover:bg-accent md:opacity-0 md:group-hover/attachment:opacity-100 md:focus-visible:opacity-100"
+            onClick={() => attachments.remove(file.id)}
+          >
+            <XIcon className="size-3" />
+          </button>
+        </div>
+      ))}
+      {preview ? (
+        <ImageLightbox
+          src={preview.url}
+          filename={preview.filename}
+          open
+          onOpenChange={(open) => {
+            if (!open) setPreview(null);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+};
 
 export type PromptInputTextareaProps = ComponentProps<
   typeof InputGroupTextarea

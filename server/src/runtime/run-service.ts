@@ -2,7 +2,12 @@ import { prisma } from "../db.js";
 import { sessionRepository } from "../repositories/session-repository.js";
 import type { ChatUIMessage } from "../chat-types.js";
 import type { ModelSelection } from "../providers/provider-service.js";
-import { parseToolPermissionMap, type ApprovalDecision } from "./tools/index.js";
+import {
+  parseToolPermissionMap,
+  type ApprovalDecision,
+  type AskUserBridge,
+  type AskUserQuestion,
+} from "./tools/index.js";
 
 export const ACTIVE_RUN_STATUSES = ["queued", "running", "waiting_approval"] as const;
 
@@ -19,6 +24,7 @@ interface StartRunInput {
 interface ActiveRunHandle {
   abort(): void;
   approvals: InteractiveApprovalBridge;
+  asks: AskUserBridge;
 }
 
 function messageTitle(messages: ChatUIMessage[]): string | undefined {
@@ -91,6 +97,58 @@ class InteractiveApprovalBridge {
   }
 }
 
+/**
+ * askUser 工具的交互桥：与审批同一套路（落一行 pending 记录 + 500ms 轮询），
+ * 但没有有效期——卡片会一直挂着，直到用户提交/跳过、或运行被中止。
+ * 中止时按“全部跳过”收尾（null 数组），让工具调用体面地结束而不是悬挂。
+ */
+class InteractiveAskBridge implements AskUserBridge {
+  constructor(
+    private readonly runId: string,
+    private readonly signal?: AbortSignal,
+  ) {}
+
+  async ask(questions: AskUserQuestion[]): Promise<Array<string[] | null>> {
+    const skipped = questions.map(() => null);
+    const prompt = await prisma.askUserPrompt.create({
+      data: { runId: this.runId, questions: JSON.stringify(questions) },
+    });
+    await runService.updateStatus(this.runId, "waiting_approval");
+
+    while (!this.signal?.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const row = await prisma.askUserPrompt.findUnique({ where: { id: prompt.id } });
+      if (!row) break;
+      if (row.status === "answered" && row.answers) {
+        await runService.updateStatus(this.runId, "running");
+        try {
+          const parsed: unknown = JSON.parse(row.answers);
+          if (Array.isArray(parsed) && parsed.length === questions.length) {
+            return parsed as Array<string[] | null>;
+          }
+        } catch {
+          // Malformed answers fall through to the skipped result below.
+        }
+        break;
+      }
+      if (row.status === "cancelled") {
+        await runService.updateStatus(this.runId, "running");
+        return skipped;
+      }
+    }
+
+    await prisma.askUserPrompt.update({
+      where: { id: prompt.id },
+      data: { status: "cancelled" },
+    }).catch(() => undefined);
+    // 运行已被中止时不再改状态，收尾交给 finish(..., "aborted")。
+    if (!this.signal?.aborted) {
+      await runService.updateStatus(this.runId, "running");
+    }
+    return skipped;
+  }
+}
+
 class ThreadRunService {
   private readonly activeRuns = new Map<string, ActiveRunHandle>();
 
@@ -134,15 +192,18 @@ class ThreadRunService {
   registerAbortSource(runId: string) {
     const controller = new AbortController();
     const approvals = new InteractiveApprovalBridge(runId, controller.signal);
+    const asks = new InteractiveAskBridge(runId, controller.signal);
     const handle: ActiveRunHandle = {
       abort: () => controller.abort(),
       approvals,
+      asks,
     };
     this.activeRuns.set(runId, handle);
 
     return {
       signal: controller.signal,
       approvals,
+      asks,
       cleanup: () => {
         this.activeRuns.delete(runId);
       },
@@ -244,6 +305,10 @@ class ThreadRunService {
           orderBy: { createdAt: "desc" },
           take: 10,
         },
+        asks: {
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        },
       },
     });
   }
@@ -253,6 +318,7 @@ class ThreadRunService {
       where: { id },
       include: {
         approvals: { orderBy: { createdAt: "desc" }, take: 50 },
+        asks: { orderBy: { createdAt: "desc" }, take: 50 },
         events: { orderBy: { sequence: "asc" }, take: 200 },
       },
     });

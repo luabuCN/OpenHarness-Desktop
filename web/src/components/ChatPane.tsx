@@ -1,9 +1,11 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ChatUIMessage } from "@/lib/chat-utils";
+import { prepareAttachments } from "@/lib/attachments";
 import {
   CircleAlertIcon,
+  ImageIcon,
   InfoIcon,
   LoaderCircleIcon,
   PanelRightCloseIcon,
@@ -22,11 +24,13 @@ import {
   PromptInputActionMenu,
   PromptInputActionMenuContent,
   PromptInputActionMenuTrigger,
+  PromptInputAttachments,
   PromptInputBody,
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
+  usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import { Shimmer } from "@/components/ai-elements/shimmer";
@@ -35,6 +39,7 @@ import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import type {
   ApprovalAction,
   ApprovalInfo,
+  AskUserInfo,
   ModelSelection,
   PermissionMode,
   ProjectInfo,
@@ -49,6 +54,7 @@ import { ModelSelector } from "./ModelSelector";
 import { AgentSelector } from "./AgentSelector";
 import { ProjectSelector } from "./ProjectSelector";
 import { ApprovalPrompt } from "./ApprovalPrompt";
+import { AskUserPrompt } from "./AskUserPrompt";
 import { PermissionModeSelector } from "./PermissionModeSelector";
 
 const SUGGESTIONS = [
@@ -56,6 +62,10 @@ const SUGGESTIONS = [
   "我正在使用什么操作系统和 Shell？",
   "总结一下这个工作区的内容",
 ];
+
+/** 单个附件的大小上限；PDF/Word/表格以 data URL 形式随消息发送，过大
+ * 的文件会显著拖慢请求与每轮重放，超限时在前端直接拦截。 */
+const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 
 /** 最近一次回合异常结束（且没有文字总结）时的提示。 */
 export interface TurnOutcomeNote {
@@ -89,6 +99,13 @@ export interface ChatPaneProps {
     approvalId: string,
     action: ApprovalAction,
   ) => void;
+  /** askUser 工具挂起的提问卡片（与审批一样由运行轮询驱动）。 */
+  pendingAsks: Array<{ run: RunInfo; ask: AskUserInfo }>;
+  onAskAnswer: (
+    runId: string,
+    askId: string,
+    answers: Array<string[] | null>,
+  ) => void;
   turnNote?: TurnOutcomeNote;
   /** 聊天内容里的链接点击后改在内置浏览器面板中打开。 */
   onOpenLink?: (url: string) => void;
@@ -118,6 +135,8 @@ export function ChatPane({
   onProjectCreated,
   pendingApprovals,
   onApprovalDecision,
+  pendingAsks,
+  onAskAnswer,
   turnNote,
   onOpenLink,
   onStop,
@@ -128,17 +147,37 @@ export function ChatPane({
     busy && chat.messages.at(-1)?.role === "assistant"
       ? chat.messages.at(-1)?.id
       : undefined;
+  // 附件被拒（超大小/类型不符）时的短暂提示，几秒后自动消失。
+  const [attachmentError, setAttachmentError] = useState<string>();
+  useEffect(() => {
+    if (!attachmentError) return;
+    const timer = window.setTimeout(() => setAttachmentError(undefined), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [attachmentError]);
   const error =
     chat.error instanceof Error
       ? chat.error.message
       : typeof chat.error === "string"
         ? chat.error
         : undefined;
+  // 当前选中模型是否声明了图片输入：true/false 明确提示，undefined 表示目录
+  // 未配置模态信息（不做提示，避免误导）。
+  const selectedModel = displaySelection
+    ? providers
+        .find((provider) => provider.id === displaySelection.providerId)
+        ?.models.find((model) => model.id === displaySelection.modelId)
+    : undefined;
+  const modelAcceptsImages = selectedModel?.modalities?.input?.includes("image");
   // 一次只确认一条：按创建时间取最早的一条，其余等这条处理完再依次出现。
   const sortedApprovals = [...pendingApprovals].sort((a, b) =>
     a.approval.createdAt.localeCompare(b.approval.createdAt),
   );
   const activeApproval = sortedApprovals[0];
+  // 提问卡片同理：最早一条先答；与审批同时挂起时审批优先（权限先放行，回合才能继续）。
+  const sortedAsks = [...pendingAsks].sort((a, b) =>
+    a.ask.createdAt.localeCompare(b.ask.createdAt),
+  );
+  const activeAsk = sortedAsks[0];
 
   // 聊天里的链接（markdown/自动识别的 URL）默认会走系统浏览器打开；
   // 拦截后送进内置浏览器面板，和预览行为保持一致。
@@ -180,7 +219,7 @@ export function ChatPane({
 
       <MessageLinkContext.Provider value={onOpenLink}>
         <Conversation onClickCapture={handleLinkClickCapture}>
-          <ConversationContent className="mx-auto w-full max-w-3xl gap-6 py-6">
+          <ConversationContent className="mx-auto w-full max-w-5xl gap-6 py-6">
             {chat.messages.length === 0 ? (
               <ConversationEmptyState
                 title="本地工作区已就绪"
@@ -218,7 +257,7 @@ export function ChatPane({
       </MessageLinkContext.Provider>
 
       <div className="shrink-0 px-4 pb-4">
-        <div className="mx-auto w-full max-w-3xl">
+        <div className="mx-auto w-full max-w-5xl">
           {activeApproval ? (
             <div className="mb-12">
               <ApprovalPrompt
@@ -235,24 +274,51 @@ export function ChatPane({
               />
             </div>
           ) : null}
+          {activeAsk ? (
+            <div className="mb-12">
+              <AskUserPrompt
+                ask={activeAsk.ask}
+                onSubmit={(answers) =>
+                  onAskAnswer(activeAsk.run.id, activeAsk.ask.id, answers)
+                }
+              />
+            </div>
+          ) : null}
           <PromptInput
             className="w-full rounded-xl border bg-card shadow-sm"
-            onSubmit={({ text, files }) => {
+            onSubmit={async ({ text, files }) => {
               if (busy || (!text.trim() && files.length === 0)) return;
-              void chat.sendMessage({
-                text,
-                ...(files.length > 0 ? { files } : {}),
-              }, {
-                body: {
-                  thinkingMode: reasoningEffort === "off" ? "fast" : "deep",
-                  reasoningEffort,
-                  agentId,
-                  projectId,
+              // 发送前处理附件：压缩大图。其余类型（PDF/Word/表格等）原样
+              // 发送，服务端会落盘并把路径告诉模型。
+              const prepared = await prepareAttachments(files);
+              if (!text.trim() && prepared.length === 0) return;
+              void chat.sendMessage(
+                {
+                  text,
+                  ...(prepared.length > 0 ? { files: prepared } : {}),
                 },
-              });
+                {
+                  body: {
+                    thinkingMode: reasoningEffort === "off" ? "fast" : "deep",
+                    reasoningEffort,
+                    agentId,
+                    projectId,
+                  },
+                },
+              );
             }}
+            maxFileSize={ATTACHMENT_MAX_BYTES}
+            onError={(issue) => setAttachmentError(issue.message)}
           >
             <PromptInputBody>
+              {attachmentError ? (
+                <p className="flex w-full items-center gap-1.5 px-1 pb-1 text-xs text-destructive">
+                  <CircleAlertIcon className="size-3.5 shrink-0" />
+                  {attachmentError}
+                </p>
+              ) : null}
+              <PromptInputAttachments />
+              <AttachmentVisionHint acceptsImages={modelAcceptsImages} />
               <PromptInputTextarea />
             </PromptInputBody>
             <PromptInputFooter>
@@ -306,6 +372,24 @@ function hasVisibleAssistantWork(messages: ChatUIMessage[]): boolean {
     if (part.type === "reasoning") return true;
     return isToolUIPart(part);
   });
+}
+
+/** 暂存了图片但当前模型明确不支持图片输入时的一行提示。必须在
+ * PromptInput 内渲染（读取附件上下文）；模态未知时不提示。 */
+function AttachmentVisionHint({ acceptsImages }: { acceptsImages?: boolean }) {
+  const attachments = usePromptInputAttachments();
+  const hasImage = attachments.files.some((file) =>
+    file.mediaType.startsWith("image/"),
+  );
+  if (!hasImage || acceptsImages !== false) return null;
+  return (
+    <p className="flex w-full items-center gap-1.5 px-1 pb-1 text-xs text-amber-600 dark:text-amber-400">
+      <ImageIcon className="size-3.5 shrink-0" />
+      <span className="min-w-0 break-words">
+        当前模型未声明图片输入，附件图片可能被忽略。可在「管理模型」中勾选模型的图像输入模态，或切换到支持视觉的模型。
+      </span>
+    </p>
+  );
 }
 
 function AssistantLoadingView({ effort }: { effort: ReasoningEffort }) {

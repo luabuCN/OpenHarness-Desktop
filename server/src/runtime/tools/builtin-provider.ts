@@ -18,6 +18,7 @@ import {
   walkFiles,
 } from "./fs-utils.js";
 import { FileTooLargeError } from "../../safe-fs.js";
+import { extractDocumentText, isDocumentPath } from "./document-extract.js";
 
 const announceTool = createTool({
   id: "announce",
@@ -30,7 +31,7 @@ function createReadFileTool(fsProvider: SafeFsProvider): RuntimeTool {
   return createTool({
     id: "readFile",
     description:
-      "Read text file contents with line numbers. Use offset and limit for large files.",
+      "Read text file contents with line numbers. Use offset and limit for large files. PDF/Word/Excel (.pdf/.docx/.xlsx/.pptx) attachments are supported: their text is extracted automatically.",
     inputSchema: z.object({
       filePath: z.string().describe("Workspace-relative or absolute path"),
       offset: z.number().int().min(1).optional(),
@@ -38,6 +39,40 @@ function createReadFileTool(fsProvider: SafeFsProvider): RuntimeTool {
     }),
     execute: async ({ filePath, offset, limit }) => {
       const resolved = fsProvider.resolvePath(filePath);
+      // 文档附件（PDF/Word/表格）先做文本提取，再走统一的行分页输出。
+      if (isDocumentPath(resolved)) {
+        try {
+          const extracted = await extractDocumentText(resolved);
+          if (extracted.text.length === 0) {
+            return { error: `No extractable text found in document: ${resolved}` };
+          }
+          const lines = extracted.text.split("\n");
+          const start = Math.max((offset ?? 1) - 1, 0);
+          const end = Math.min(start + (limit ?? DEFAULT_MAX_LINES), lines.length);
+          return {
+            filePath: resolved,
+            totalLines: lines.length,
+            fromLine: start + 1,
+            toLine: end,
+            truncated: extracted.truncated,
+            status: buildContinuationStatus({
+              total: lines.length,
+              shownThrough: end,
+              truncated: extracted.truncated,
+              continuationLabel: "lines",
+            }),
+            note: `Extracted ${path.extname(resolved).toLowerCase().slice(1)} text (formatting/graphics not preserved)`,
+            content: lines
+              .slice(start, end)
+              .map((line, index) => `${start + index + 1}: ${truncateText(line, DEFAULT_MAX_LINE_LENGTH)}`)
+              .join("\n"),
+          };
+        } catch (error) {
+          return {
+            error: `Failed to extract document text from ${resolved}: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+      }
       if (isBinaryPath(resolved)) return { error: `Cannot read binary file: ${resolved}` };
 
       let content: string;

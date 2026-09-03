@@ -11,9 +11,11 @@ import {
   listProjects,
   listProviders,
   abortConversation,
+  answerAsk,
   decideApproval,
   isPermissionMode,
   type ApprovalAction,
+  type AskUserInfo,
   type ModelSelection,
   type PermissionMode,
   type ProjectInfo,
@@ -54,10 +56,11 @@ function loadReasoningEffort(): ReasoningEffort {
 const PERMISSION_MODE_KEY = "openharness.permissionMode";
 const AGENT_KEY = "openharness.agentId";
 const PROJECT_KEY = "openharness.projectId";
-// 标签栏（文件/任务/变更/Git/工具结果/用量）的最小内容宽度实测约 443px，
-// 最小宽度取 450 保证六个标签全部可见、无需横向滚动。
-const PANEL_WIDTH_MIN = 450;
-const PANEL_WIDTH_DEFAULT = 460;
+// 标签栏（文件/浏览器/任务/变更/Git/工具结果/用量）七个标签的最小内容
+// 宽度实测约 524px，最小宽度取 530 保证全部可见、无需横向滚动——否则
+// "用量"会被裁在标签条右缘，看起来像面板丢了。
+const PANEL_WIDTH_MIN = 530;
+const PANEL_WIDTH_DEFAULT = 530;
 
 /** Stable identity across renders so memoized RightPanel skips work on tabs
  * that do not read the transcript (files/tasks/changes/git). */
@@ -265,7 +268,7 @@ function SessionView({
           const signature = next
             .map(
               (run) =>
-                `${run.id}:${run.status}:${run.approvals.filter((approval) => approval.status === "pending").length}`,
+                `${run.id}:${run.status}:${run.approvals.filter((approval) => approval.status === "pending").length}:${(run.asks ?? []).filter((ask) => ask.status === "pending").length}`,
             )
             .join("|");
           if (signature === runsSignatureRef.current) return;
@@ -301,6 +304,12 @@ function SessionView({
     run.approvals
       .filter((approval) => approval.status === "pending")
       .map((approval) => ({ run, approval })),
+  );
+
+  const pendingAsks = runs.flatMap((run) =>
+    (run.asks ?? [])
+      .filter((ask) => ask.status === "pending")
+      .map((ask) => ({ run, ask })),
   );
 
   // 模型目录里的上下文窗口大小，供用量页计算上下文占用。
@@ -364,6 +373,33 @@ function SessionView({
               },
         ),
       );
+    },
+    [],
+  );
+
+  // 提交后先本地把卡片置为已回答（1 秒轮询回来前界面立即收起），
+  // 失败则回退为 pending，让用户重试。
+  const handleAskAnswer = useCallback(
+    async (runId: string, askId: string, answers: Array<string[] | null>) => {
+      const mark = (status: AskUserInfo["status"]) =>
+        setRuns((current) =>
+          current.map((run) =>
+            run.id !== runId
+              ? run
+              : {
+                  ...run,
+                  asks: (run.asks ?? []).map((ask) =>
+                    ask.id === askId ? { ...ask, status } : ask,
+                  ),
+                },
+          ),
+        );
+      mark("answered");
+      try {
+        await answerAsk(runId, askId, answers);
+      } catch {
+        mark("pending");
+      }
     },
     [],
   );
@@ -488,6 +524,10 @@ function SessionView({
         pendingApprovals={pendingApprovals}
         onApprovalDecision={(runId, approvalId, action) =>
           void handleApprovalDecision(runId, approvalId, action)
+        }
+        pendingAsks={pendingAsks}
+        onAskAnswer={(runId, askId, answers) =>
+          void handleAskAnswer(runId, askId, answers)
         }
         turnNote={turnNote}
         onOpenLink={handleOpenLink}

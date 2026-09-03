@@ -1,7 +1,9 @@
 import type { ToolPart } from "@/lib/chat-utils";
 
 /** 动作类别决定一行式工具调用的图标与措辞（参考 PI-Desktop 的 ToolRow）。 */
-export type ToolAction = "read" | "list" | "search" | "write" | "edit" | "run" | "git" | "task" | "use";
+export type ToolAction =
+  | "read" | "list" | "search" | "write" | "edit" | "run" | "git" | "task"
+  | "delegate" | "use";
 
 export interface ToolDisplay {
   action: ToolAction;
@@ -89,6 +91,12 @@ const TASK_VERBS: Record<string, string> = {
   TaskUpdate: "更新任务",
 };
 
+const DELEGATE_VERBS: Record<string, string> = {
+  DelegateWait: "等待委派",
+  DelegateList: "查看委派",
+  DelegateStop: "停止委派",
+};
+
 /** 工具调用的一行式描述：动词随状态（进行中/已完成）变化，摘要取主要参数。 */
 export function describeTool(part: ToolPart): ToolDisplay {
   const name = part.type === "dynamic-tool" ? part.toolName : part.type.slice("tool-".length);
@@ -138,6 +146,42 @@ export function describeTool(part: ToolPart): ToolDisplay {
       };
     case "announce":
       return { action: "use", verb: "播报", runningVerb: running("播报"), summary: summaryOf(input) };
+    case "askUser": {
+      const questions = input?.questions;
+      const first =
+        Array.isArray(questions) && questions[0] && typeof questions[0] === "object"
+          ? pickString(questions[0] as ToolInput, ["question"])
+          : undefined;
+      return {
+        action: "use",
+        verb: "征询用户",
+        runningVerb: running("等待用户选择"),
+        summary: truncateSummary(first ?? ""),
+      };
+    }
+    case "Delegate": {
+      const agent = pickString(input, ["agent"]) ?? "";
+      const task = firstLine(pickString(input, ["task"]) ?? "");
+      return {
+        action: "delegate",
+        verb: `委派 ${agent}`,
+        runningVerb: `正在委派 ${agent}`,
+        summary: truncateSummary(task),
+      };
+    }
+    case "DelegateWait": {
+      const ids = input?.delegationIds;
+      const label =
+        Array.isArray(ids) && ids.length > 0
+          ? `${ids.length} 个委派`
+          : "全部运行中的委派";
+      return {
+        action: "delegate",
+        verb: "等待委派",
+        runningVerb: "正在等待子智能体",
+        summary: label,
+      };
+    }
     case "gitCommit":
       return {
         action: "git",
@@ -162,6 +206,14 @@ export function describeTool(part: ToolPart): ToolDisplay {
       action: "task",
       verb: TASK_VERBS[name],
       runningVerb: running(TASK_VERBS[name]),
+      summary: summaryOf(input),
+    };
+  }
+  if (name in DELEGATE_VERBS) {
+    return {
+      action: "delegate",
+      verb: DELEGATE_VERBS[name],
+      runningVerb: running(DELEGATE_VERBS[name]),
       summary: summaryOf(input),
     };
   }

@@ -1,5 +1,7 @@
 import { config } from "../../env.js";
+import { AskUserToolProvider } from "./ask-provider.js";
 import { BuiltinToolProvider } from "./builtin-provider.js";
+import { DelegationToolProvider } from "./delegation-provider.js";
 import { GitToolProvider } from "./git-provider.js";
 import { resolveToolPolicies } from "./policies.js";
 import { createRunContext, type RunContext } from "./run-context.js";
@@ -7,6 +9,8 @@ import { TaskToolProvider } from "./task-provider.js";
 import { WorkspaceToolProvider } from "./workspace-provider.js";
 import type {
   ApprovalBridge,
+  AskUserBridge,
+  DelegationBridge,
   PermissionMode,
   RuntimeTool,
   ToolPermissionMap,
@@ -156,6 +160,8 @@ export class ToolProviderRegistry {
     overrides?: ToolPermissionMap;
     disabledTools?: ReadonlySet<string>;
     approvals?: ApprovalBridge;
+    askUser?: AskUserBridge;
+    delegate?: DelegationBridge;
     signal?: AbortSignal;
   }): RunContext {
     const readOnly = input.readOnly ?? false;
@@ -178,6 +184,8 @@ export class ToolProviderRegistry {
         disabledTools,
       }),
       approvals: input.approvals,
+      askUser: input.askUser,
+      delegate: input.delegate,
       signal: input.signal,
     });
   }
@@ -191,6 +199,10 @@ export class ToolProviderRegistry {
       ...parent,
       readOnly: changes.readOnly,
       subAgent: true,
+      // 子智能体不能阻塞在用户输入上，也不能再生委派：
+      // askUser 和 Delegate 只属于主智能体回合。
+      askUser: undefined,
+      delegate: undefined,
       toolPolicies: this.policiesFor({
         mode: parent.permissionMode,
         readOnly: changes.readOnly,
@@ -227,3 +239,5 @@ toolProviderRegistry.register(new BuiltinToolProvider());
 toolProviderRegistry.register(new WorkspaceToolProvider());
 toolProviderRegistry.register(new GitToolProvider());
 toolProviderRegistry.register(new TaskToolProvider());
+toolProviderRegistry.register(new AskUserToolProvider());
+toolProviderRegistry.register(new DelegationToolProvider());

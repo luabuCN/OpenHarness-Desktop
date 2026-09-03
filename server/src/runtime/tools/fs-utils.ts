@@ -14,6 +14,8 @@ export const BINARY_EXTENSIONS = new Set([
   ".mp4", ".avi", ".mov", ".wav", ".flac", ".ogg", ".webm", ".mkv",
   ".pdf", ".wasm", ".class", ".jar", ".pyc", ".pyd", ".whl",
   ".ttf", ".otf", ".woff", ".woff2", ".eot", ".sqlite", ".db",
+  // OOXML/Office 文档：readFile 走文本提取，但不能当普通文本改写。
+  ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",
 ]);
 
 /** Provider bound to the global workspace; used by the file-browser API. */

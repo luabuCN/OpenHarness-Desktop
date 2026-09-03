@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Bot, Cloud, FolderOpen, Wrench } from "lucide-react";
+import { ArrowLeft, Bot, BotIcon, Cloud, FolderOpen, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -8,9 +8,10 @@ import { cn } from "@/lib/utils";
 import { ProvidersSection } from "./ProvidersSection";
 import { AgentsSection } from "./AgentsSection";
 import { ProjectsSection } from "./ProjectsSection";
+import { SubAgentsSection } from "./SubAgentsSection";
 import { ToolsSection } from "./ToolsSection";
 
-type SettingsSectionKey = "projects" | "agents" | "models" | "tools";
+type SettingsSectionKey = "projects" | "agents" | "subagents" | "models" | "tools";
 
 const NAV_ITEMS: {
   key: SettingsSectionKey;
@@ -19,6 +20,7 @@ const NAV_ITEMS: {
 }[] = [
   { key: "projects", label: "项目", icon: FolderOpen },
   { key: "agents", label: "Agent", icon: Bot },
+  { key: "subagents", label: "子智能体", icon: BotIcon },
   { key: "models", label: "模型", icon: Cloud },
   { key: "tools", label: "工具", icon: Wrench },
 ];
@@ -69,6 +71,7 @@ export function SettingsPage({ onExit, onChanged }: SettingsPageProps) {
         <div className="min-w-0 flex-1 overflow-y-auto">
           {section === "projects" ? <ProjectsSection onChanged={onChanged} /> : null}
           {section === "agents" ? <AgentsSection onChanged={onChanged} /> : null}
+          {section === "subagents" ? <SubAgentsSection /> : null}
           {section === "models" ? <ProvidersSection onChanged={onChanged} /> : null}
           {section === "tools" ? <ToolsSection /> : null}
         </div>

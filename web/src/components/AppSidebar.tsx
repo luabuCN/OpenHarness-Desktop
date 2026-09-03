@@ -228,28 +228,33 @@ export function AppSidebar({
                         }
                       >
                         <SidebarMenuItem>
-                          <CollapsibleTrigger asChild>
-                            <SidebarMenuButton
-                              isActive={project.id === activeProjectId}
-                              title={project.rootPath}
-                              onClick={() => onSelectProject(project.id)}
+                          {/* 项目行单独包一层 relative：SidebarMenuAction 的
+                              top-1/2 只应相对行高居中，若直接放在含展开列表
+                              的菜单项里，加号会掉到整组高度的中点。 */}
+                          <div className="relative">
+                            <CollapsibleTrigger asChild>
+                              <SidebarMenuButton
+                                isActive={project.id === activeProjectId}
+                                title={project.rootPath}
+                                onClick={() => onSelectProject(project.id)}
+                              >
+                                {open ? (
+                                  <FolderOpen className="text-muted-foreground" />
+                                ) : (
+                                  <Folder className="text-muted-foreground" />
+                                )}
+                                <span>{project.name}</span>
+                              </SidebarMenuButton>
+                            </CollapsibleTrigger>
+                            <SidebarMenuAction
+                              showOnHover
+                              className="top-1/2! -translate-y-1/2 text-muted-foreground hover:text-sidebar-accent-foreground"
+                              onClick={() => onNewInProject(project.id)}
+                              title="新建项目对话"
                             >
-                              {open ? (
-                                <FolderOpen className="text-muted-foreground" />
-                              ) : (
-                                <Folder className="text-muted-foreground" />
-                              )}
-                              <span>{project.name}</span>
-                            </SidebarMenuButton>
-                          </CollapsibleTrigger>
-                          <SidebarMenuAction
-                            showOnHover
-                            className="top-1/2! -translate-y-1/2 text-muted-foreground hover:text-sidebar-accent-foreground"
-                            onClick={() => onNewInProject(project.id)}
-                            title="新建项目对话"
-                          >
-                            <Plus />
-                          </SidebarMenuAction>
+                              <Plus />
+                            </SidebarMenuAction>
+                          </div>
                           <CollapsibleContent>
                             <div className="mt-1 ml-4 py-1">
                               {sessionList(projectSessions.grouped.get(project.id) ?? [], project.id)}

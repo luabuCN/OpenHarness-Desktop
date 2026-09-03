@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Bot, Copy, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 
 import {
-  deleteAgent,
-  listAgents,
+  deleteSubAgent,
   listProviders,
-  updateAgent,
-  type AgentInfo,
+  listSubAgents,
+  updateSubAgent,
   type ProviderInfo,
+  type SubAgentDefinitionInfo,
 } from "@/api";
 import {
   AlertDialog,
@@ -24,30 +24,28 @@ import { Button } from "@/components/ui/button";
 import { Item, ItemActions, ItemContent, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
-import { AgentFormSheet } from "./AgentFormSheet";
+import { SubAgentFormSheet } from "./SubAgentFormSheet";
 
-interface AgentsSectionProps {
-  onChanged?: () => void;
-}
-
-export function AgentsSection({ onChanged }: AgentsSectionProps) {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
+/** 委派式子智能体管理（Delegate 工具的目录）：内置四条 + 自定义。 */
+export function SubAgentsSection() {
+  const [subagents, setSubagents] = useState<SubAgentDefinitionInfo[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<AgentInfo | null>(null);
-  const [deleting, setDeleting] = useState<AgentInfo | null>(null);
+  const [editing, setEditing] = useState<SubAgentDefinitionInfo | null>(null);
+  const [copying, setCopying] = useState<SubAgentDefinitionInfo | null>(null);
+  const [deleting, setDeleting] = useState<SubAgentDefinitionInfo | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextAgents, nextProviders] = await Promise.all([listAgents(), listProviders()]);
-      setAgents(nextAgents);
+      const [nextSubagents, nextProviders] = await Promise.all([listSubAgents(), listProviders()]);
+      setSubagents(nextSubagents);
       setProviders(nextProviders);
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "加载 Agent 失败");
+      setError(cause instanceof Error ? cause.message : "加载子智能体失败");
     } finally {
       setLoading(false);
     }
@@ -57,13 +55,12 @@ export function AgentsSection({ onChanged }: AgentsSectionProps) {
     void refresh();
   }, [refresh]);
 
-  async function toggleActive(agent: AgentInfo, isActive: boolean) {
-    setAgents((current) =>
-      current.map((entry) => (entry.id === agent.id ? { ...entry, isActive } : entry)),
+  async function toggleActive(entry: SubAgentDefinitionInfo, isActive: boolean) {
+    setSubagents((current) =>
+      current.map((item) => (item.id === entry.id ? { ...item, isActive } : item)),
     );
     try {
-      await updateAgent(agent.id, { isActive });
-      onChanged?.();
+      await updateSubAgent(entry.id, { isActive });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "更新失败");
       void refresh();
@@ -75,9 +72,8 @@ export function AgentsSection({ onChanged }: AgentsSectionProps) {
     const target = deleting;
     setDeleting(null);
     try {
-      await deleteAgent(target.id);
+      await deleteSubAgent(target.id);
       await refresh();
-      onChanged?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "删除失败");
     }
@@ -86,10 +82,16 @@ export function AgentsSection({ onChanged }: AgentsSectionProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between p-4">
-        <div className="text-base font-semibold">Agent</div>
+        <div>
+          <div className="text-base font-semibold">子智能体</div>
+          <p className="text-xs text-muted-foreground">
+            主 Agent 通过 Delegate 工具在后台委派任务；只有子智能体的最终报告会回到对话。
+          </p>
+        </div>
         <Button
           onClick={() => {
             setEditing(null);
+            setCopying(null);
             setFormOpen(true);
           }}
         >
@@ -106,45 +108,53 @@ export function AgentsSection({ onChanged }: AgentsSectionProps) {
           </p>
         ) : (
           <div className="flex flex-col gap-2 p-4">
-            {agents.map((agent) => {
-              const provider = providers.find((entry) => entry.id === agent.defaultProviderId);
-              const model = provider?.models.find((entry) => entry.id === agent.defaultModelId);
+            {subagents.map((entry) => {
+              const provider = providers.find((item) => item.id === entry.providerId);
+              const model = provider?.models.find((item) => item.id === entry.modelId);
               return (
-                <Item variant="outline" key={agent.id}>
+                <Item variant="outline" key={entry.id}>
                   <ItemContent>
                     <ItemTitle>
                       <Bot size={16} />
-                      <span>{agent.name}</span>
-                      {agent.isBuiltIn ? <Badge variant="secondary">内置</Badge> : null}
-                      {!agent.isActive ? <Badge variant="outline">停用</Badge> : null}
+                      <span className="font-mono">{entry.name}</span>
+                      {entry.isBuiltIn ? <Badge variant="secondary">内置</Badge> : null}
+                      {!entry.isActive ? <Badge variant="outline">停用</Badge> : null}
                     </ItemTitle>
-                    <p className="line-clamp-2 text-xs text-muted-foreground">{agent.description}</p>
+                    <p className="line-clamp-2 text-xs text-muted-foreground">{entry.description}</p>
                     <p className="text-xs text-muted-foreground">
-                      {model ? `默认 ${provider?.name} / ${model.name}` : "跟随项目或全局模型"}
+                      工具：{entry.tools.join(" / ")}
+                      {model ? ` · 固定 ${provider?.name} / ${model.name}` : ""}
+                      {entry.maxTurns ? ` · 上限 ${entry.maxTurns} 轮` : ""}
                     </p>
                   </ItemContent>
                   <ItemActions>
                     <Switch
-                      checked={agent.isActive}
-                      onCheckedChange={(checked) => void toggleActive(agent, !!checked)}
+                      checked={entry.isActive}
+                      onCheckedChange={(checked) => void toggleActive(entry, !!checked)}
                     />
                     <Button
                       variant="outline"
                       size="icon-sm"
-                      title="编辑"
+                      title={entry.isBuiltIn ? "复制为自定义版本" : "编辑"}
                       onClick={() => {
-                        setEditing(agent);
+                        if (entry.isBuiltIn) {
+                          setCopying(entry);
+                          setEditing(null);
+                        } else {
+                          setEditing(entry);
+                          setCopying(null);
+                        }
                         setFormOpen(true);
                       }}
                     >
-                      <Pencil size={14} />
+                      {entry.isBuiltIn ? <Copy size={14} /> : <Pencil size={14} />}
                     </Button>
                     <Button
                       variant="destructive"
                       size="icon-sm"
-                      title={agent.isBuiltIn ? "内置 Agent 不能删除" : "删除"}
-                      disabled={agent.isBuiltIn}
-                      onClick={() => setDeleting(agent)}
+                      title={entry.isBuiltIn ? "内置子智能体不能删除" : "删除"}
+                      disabled={entry.isBuiltIn}
+                      onClick={() => setDeleting(entry)}
                     >
                       <Trash2 size={14} />
                     </Button>
@@ -156,10 +166,11 @@ export function AgentsSection({ onChanged }: AgentsSectionProps) {
         )}
       </ScrollArea>
 
-      <AgentFormSheet
+      <SubAgentFormSheet
         open={formOpen}
         onOpenChange={setFormOpen}
-        initial={editing}
+        initial={editing ?? copying}
+        copyOf={copying !== null}
         providers={providers}
         onSaved={() => void refresh()}
       />
@@ -169,7 +180,7 @@ export function AgentsSection({ onChanged }: AgentsSectionProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
-              删除 Agent「{deleting?.name ?? ""}」？相关项目默认 Agent 会被清空。
+              删除子智能体「{deleting?.name ?? ""}」？主 Agent 将不能再委派任务给它。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -1,6 +1,10 @@
 export type {
   ApprovalBridge,
   ApprovalDecision,
+  AskUserBridge,
+  AskUserQuestion,
+  DelegationBridge,
+  DelegationRecord,
   PermissionMode,
   RuntimeTool,
   ToolPermissionMap,

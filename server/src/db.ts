@@ -1,6 +1,7 @@
 import "./env.js";
 import { PrismaClient } from "@prisma/client";
 import { builtInAgentRows } from "./runtime/agent-defaults.js";
+import { subAgentService } from "./runtime/subagents.js";
 
 export const prisma = new PrismaClient();
 
@@ -151,6 +152,23 @@ export async function ensureSchema() {
     'CREATE INDEX IF NOT EXISTS "ToolApproval_runId_status_idx" ON "ToolApproval" ("runId", "status")',
   );
   await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "AskUserPrompt" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "runId" TEXT NOT NULL,
+      "questions" TEXT NOT NULL,
+      "answers" TEXT,
+      "status" TEXT NOT NULL DEFAULT 'pending',
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "AskUserPrompt_runId_fkey"
+        FOREIGN KEY ("runId") REFERENCES "ThreadRun"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "AskUserPrompt_runId_status_idx" ON "AskUserPrompt" ("runId", "status")',
+  );
+  await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "AgentTask" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "conversationId" TEXT NOT NULL,
@@ -261,6 +279,28 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "FileChange_runId_idx" ON "FileChange" ("runId")',
   );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "SubAgentDefinition" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "name" TEXT NOT NULL,
+      "description" TEXT NOT NULL,
+      "tools" TEXT NOT NULL,
+      "prompt" TEXT NOT NULL,
+      "providerId" TEXT,
+      "modelId" TEXT,
+      "maxTurns" INTEGER,
+      "isActive" BOOLEAN NOT NULL DEFAULT true,
+      "isBuiltIn" BOOLEAN NOT NULL DEFAULT false,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "SubAgentDefinition_name_key" ON "SubAgentDefinition" ("name")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "SubAgentDefinition_isActive_idx" ON "SubAgentDefinition" ("isActive")',
+  );
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({
       where: { id: agent.id },
@@ -274,6 +314,7 @@ export async function ensureSchema() {
       },
     });
   }
+  await subAgentService.seedBuiltins();
 
   const staleStatuses = ["queued", "running", "waiting_approval"];
   await prisma.threadRun.updateMany({

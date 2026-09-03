@@ -1,6 +1,8 @@
 import { UNKNOWN_TOOL_POLICY } from "./policies.js";
 import type {
   ApprovalBridge,
+  AskUserBridge,
+  DelegationBridge,
   PermissionMode,
   ToolPermissionMap,
   ToolPolicy,
@@ -28,6 +30,10 @@ export interface RunContextInit {
   /** Resolved policies for this run; computed via ToolProviderRegistry.policiesFor. */
   toolPolicies: ToolPermissionMap;
   approvals?: ApprovalBridge;
+  /** askUser 工具的交互桥；子智能体上下文不带（派生时置空），避免后台任务阻塞在用户输入上。 */
+  askUser?: AskUserBridge;
+  /** Delegate 工具的委派桥；子智能体上下文不带，委派不能再生委派。 */
+  delegate?: DelegationBridge;
   signal?: AbortSignal;
   /** True for derived sub-agent contexts (no per-conversation task tools). */
   subAgent?: boolean;

@@ -31,15 +31,29 @@ export interface PreviewOpenData {
   label?: string;
 }
 
+/** 委派子智能体的直播事件（data-oh:subagent.*，由 DelegationHub 推送）。 */
+export interface SubagentEventData {
+  kind: "start" | "progress" | "done" | "error";
+  delegationId: string;
+  agentName: string;
+  task?: string;
+  steps?: number;
+  currentTool?: string;
+  status?: "completed" | "aborted" | "stopped";
+  durationMs?: number;
+  error?: string;
+}
+
 export type ChatUIMessage = UIMessage<
   unknown,
   {
     "oh:todo.updated": { todos: TodoItem[] };
     "oh:turn.done": { durationMs: number };
     "oh:usage": TurnUsagePartData;
-    "oh:subagent.start": { agentName: string; task: string };
-    "oh:subagent.done": { agentName: string; durationMs: number };
-    "oh:subagent.error": { agentName: string; error: string };
+    "oh:subagent.start": SubagentEventData;
+    "oh:subagent.progress": SubagentEventData;
+    "oh:subagent.done": SubagentEventData;
+    "oh:subagent.error": SubagentEventData;
     "oh:compaction.done": { messagesRemoved: number };
     "oh:retry": { attempt: number; reason: string };
     "oh:preview.open": PreviewOpenData;

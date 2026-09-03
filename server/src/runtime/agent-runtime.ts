@@ -13,10 +13,13 @@ import {
   type ModelSelection,
 } from "../providers/provider-service.js";
 import type { ChatUIMessage } from "../chat-types.js";
-import { agentConfigService, type SubAgentConfig } from "./agents.js";
+import { agentConfigService } from "./agents.js";
+import { materializeAttachments } from "./attachments.js";
+import { DelegationHub, type DelegationNotice } from "./delegation-hub.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
 import { runHub } from "./run-hub.js";
+import { subAgentService } from "./subagents.js";
 import {
   parseToolPermissionMap,
   toolProviderRegistry,
@@ -129,14 +132,28 @@ class AgentRuntimeService {
         overrides: projectOverrides,
         disabledTools,
         approvals: activeRun.approvals,
+        askUser: activeRun.asks,
         signal: activeRun.signal,
       });
+      // 委派中心：Delegate 工具的后端。定义来自子智能体目录（内置 + 自定义），
+      // 每个运行一个实例；运行结束（完成或中止）时停掉所有仍在跑的委派。
+      // 注意必须在 createToolSet 之前注入：DelegationToolProvider 依据桥是否存在决定贡献哪些工具。
+      const subAgentDefinitions = await subAgentService.activeList();
+      const delegationHub = new DelegationHub({
+        definitions: subAgentDefinitions,
+        workspacePath: rootPath ?? workspaceDir,
+        runContext,
+        mode,
+        effort: reasoningEffort,
+        sessionSelection: effectiveSelection,
+        signal: activeRun.signal,
+      });
+      if (subAgentDefinitions.length > 0) {
+        runContext.delegate = delegationHub;
+      }
+
       const tools = toolProviderRegistry.createToolSet(runContext);
       const maxSteps = mode === "deep" ? 120 : 80;
-
-      const subAgents = definition.subAgents.map((entry) =>
-        createSubAgent(entry, model, toolProviderRegistry.deriveContext(runContext, entry)),
-      );
 
       // 显式推理等级优先；旧客户端的 thinkingMode=deep 视为开启深度思考。
       const deepThinking = reasoningEffort ? reasoningEffort !== "off" : mode === "deep";
@@ -151,16 +168,19 @@ class AgentRuntimeService {
             : definition.instructions,
         model,
         tools,
-        ...(subAgents.length > 0
-          ? { agents: Object.fromEntries(subAgents.map((agent) => [agent.id, agent])) }
-          : {}),
         skills: [skillsDir],
         maxRetries: 3,
         inputProcessors: [new TokenLimiterProcessor({ limit: config.contextWindow })],
         defaultOptions: { maxSteps },
       });
 
-      const modelMessages = await convertToModelMessages(messages, {
+      // 非图片附件（PDF/Word/表格等）先落盘到工作区 attachments/，模型
+      // 副本里替换为路径提示；UI 消息保持原 file part，回显不受影响。
+      const { messages: modelBoundMessages } = await materializeAttachments(
+        messages,
+        rootPath ?? workspaceDir,
+      );
+      const modelMessages = await convertToModelMessages(modelBoundMessages, {
         ignoreIncompleteToolCalls: true,
       });
       const mastraStream = await agent.stream(modelMessages, {
@@ -206,6 +226,13 @@ class AgentRuntimeService {
               id: crypto.randomUUID(),
               data,
             });
+          };
+          // 委派直播：子智能体的启动/每步工具/完成事件以 data-oh:subagent.*
+          // 部件推入主流，前端折叠为 PI 式实时卡片。等待 DelegateWait 期间
+          // 界面因此仍有活动，而不是看起来阻塞。
+          delegationHub.notify = (notice: DelegationNotice) => {
+            const type = `data-oh:subagent.${notice.kind}` as const;
+            writer.write({ type, id: crypto.randomUUID(), data: notice });
           };
           const reader = sourceChunks.getReader();
           // Persisting every chunk used to await inside the read loop, which
@@ -287,8 +314,12 @@ class AgentRuntimeService {
       });
 
       // Some transport failures end before an AI SDK finish callback; release
-      // the run's controller ownership when ownership work has stopped.
-      void ownershipComplete.finally(() => activeRun.cleanup());
+      // the run's controller ownership when ownership work has stopped, and
+      // stop every delegation the run left running.
+      void ownershipComplete.finally(() => {
+        delegationHub.dispose();
+        activeRun.cleanup();
+      });
       activeRun.signal.addEventListener("abort", () => {
         setTimeout(releaseOwnership, 1_000);
       }, { once: true });
@@ -340,22 +371,6 @@ class AgentRuntimeService {
       .map(([name]) => name);
     return THINKING_MODES.map((mode) => ({ mode, tools }));
   }
-}
-
-function createSubAgent(
-  config: SubAgentConfig,
-  model: ChatModel,
-  context: RunContext,
-) {
-  return new Agent({
-    id: config.id,
-    name: config.name,
-    description: config.description,
-    instructions: config.instructions,
-    model,
-    tools: toolProviderRegistry.createToolSet(context),
-    defaultOptions: { maxSteps: 15 },
-  });
 }
 
 export const agentRuntime = new AgentRuntimeService();

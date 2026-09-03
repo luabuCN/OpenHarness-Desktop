@@ -5,6 +5,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CpuIcon,
+  ImageIcon,
   SearchIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -216,6 +217,11 @@ export function ModelSelector({
                             }}
                           >
                             <span className="min-w-0 flex-1 truncate">{model.name}</span>
+                            {model.modalities?.input?.includes("image") ? (
+                              <span className="shrink-0 rounded bg-sky-500/10 px-1 py-px text-[10px] text-sky-600 dark:text-sky-400">
+                                视觉
+                              </span>
+                            ) : null}
                             {model.reasoning ? (
                               <span className="shrink-0 rounded bg-violet-500/10 px-1 py-px text-[10px] text-violet-600 dark:text-violet-400">
                                 推理

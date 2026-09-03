@@ -78,6 +78,25 @@ model AgentConfig {
   updatedAt         DateTime @updatedAt
 }
 
+/// 委派式子智能体定义（Delegate 工具的后端目录）。内置四条随启动刷新
+/// 核心字段；自定义行完全由用户所有。name 是模型调用时的 agent 参数。
+model SubAgentDefinition {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String
+  tools       String
+  prompt      String
+  providerId  String?
+  modelId     String?
+  maxTurns    Int?
+  isActive    Boolean  @default(true)
+  isBuiltIn   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+}
+
 model ThreadRun {
   id             String         @id @default(uuid())
   conversationId String
@@ -97,6 +116,7 @@ model ThreadRun {
   completedAt    DateTime?
   events         RunEvent[]
   approvals      ToolApproval[]
+  asks           AskUserPrompt[]
   tasks          AgentTask[]
   changes        FileChange[]
 
@@ -129,6 +149,22 @@ model ToolApproval {
   decidedAt  DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+
+  @@index([runId, status])
+}
+
+/// One interactive question set the askUser tool paused on. The client writes
+/// answers back through POST /api/runs/:id/asks/:askId; the tool polls the row
+/// (like ToolApproval) so the card survives reloads and background runs.
+model AskUserPrompt {
+  id        String    @id @default(uuid())
+  runId     String
+  run       ThreadRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  questions String
+  answers   String?
+  status    String    @default("pending")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([runId, status])
 }

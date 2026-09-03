@@ -25,4 +25,53 @@ export interface ApprovalBridge {
   request(toolName: string, input: string): Promise<ApprovalDecision>;
 }
 
+/** One multiple-choice question the model wants the user to answer. */
+export interface AskUserQuestion {
+  question: string;
+  options: string[];
+  multiSelect?: boolean;
+}
+
+/**
+ * Bridge that pauses the askUser tool until the user answers through the
+ * run's pending ask prompt. `null` entries mean the user skipped/declined
+ * that question.
+ */
+export interface AskUserBridge {
+  ask(questions: AskUserQuestion[]): Promise<Array<string[] | null>>;
+}
+
+/** One background delegation started by the Delegate tool. */
+export interface DelegationRecord {
+  delegationId: string;
+  agentName: string;
+  status: "running" | "completed" | "failed" | "aborted" | "stopped";
+  startedAt: number;
+  completedAt?: number;
+  report: string;
+  steps?: number;
+  turns?: number;
+  error?: string;
+}
+
+/**
+ * Bridge injected by agent-runtime: the Delegate* tools marshal arguments,
+ * the hub (which owns models and the run's abort signal) does the spawning.
+ */
+export interface DelegationBridge {
+  start(agent: string, task: string, description?: string): Promise<
+    | { ok: true; delegationId: string }
+    | { ok: false; error: string }
+  >;
+  wait(input: {
+    delegationIds?: string[];
+    mode?: "all" | "any";
+    minCompleted?: number;
+    timeoutSeconds?: number;
+  }): Promise<{ delegations: DelegationRecord[]; note?: string; unknownIds?: string[] }>;
+  list(): DelegationRecord[];
+  stop(delegationIds?: string[]): number;
+  catalog(): Array<{ name: string; description: string; tools: string[] }>;
+}
+
 export type { PermissionMode };

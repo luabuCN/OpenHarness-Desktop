@@ -27,10 +27,20 @@ fn main() {
                 .and_then(|value| value.parse::<u16>().ok())
                 .unwrap_or(8878);
 
-            // In `pnpm dev` the tsx dev server already owns the port; spawning the
-            // sidecar then would crash with EADDRINUSE. Skip it and reuse the
-            // external server. The sidecar still starts when the port is free
-            // (standalone `tauri dev` or packaged builds).
+            // `pnpm dev` runs the tsx API server on the same port and sets
+            // OPENHARNESS_SKIP_SIDECAR so we never race it for the port.
+            let skip_sidecar = std::env::var("OPENHARNESS_SKIP_SIDECAR")
+                .map(|value| !matches!(value.as_str(), "" | "0" | "false"))
+                .unwrap_or(false);
+            if skip_sidecar {
+                println!("[sidecar] OPENHARNESS_SKIP_SIDECAR set, skipping sidecar (external API server assumed)");
+                app.manage(SidecarChild(Mutex::new(None)));
+                return Ok(());
+            }
+
+            // Remaining overlaps: a packaged build started next to a dev
+            // server, or a second app instance. Reuse whichever server got
+            // there first.
             if port_in_use(&host, port) {
                 println!(
                     "[sidecar] {host}:{port} already in use, skipping sidecar (external API server assumed)"

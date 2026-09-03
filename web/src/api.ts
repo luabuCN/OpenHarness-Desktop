@@ -141,6 +141,21 @@ export interface ApprovalInfo {
   createdAt: string;
 }
 
+export interface AskUserQuestionInfo {
+  question: string;
+  options: string[];
+  multiSelect?: boolean;
+}
+
+export interface AskUserInfo {
+  id: string;
+  runId: string;
+  questions: AskUserQuestionInfo[];
+  answers?: string | null;
+  status: "pending" | "answered" | "cancelled";
+  createdAt: string;
+}
+
 export interface RunInfo {
   id: string;
   conversationId: string;
@@ -155,6 +170,7 @@ export interface RunInfo {
   startedAt?: string | null;
   completedAt?: string | null;
   approvals: ApprovalInfo[];
+  asks?: AskUserInfo[];
 }
 
 export interface AgentTaskInfo {
@@ -214,6 +230,59 @@ export interface SubAgentInfo {
   description: string;
   instructions: string;
   readOnly: boolean;
+}
+
+/** 委派式子智能体定义（Delegate 工具目录，区别于上面的 legacy SubAgentInfo）。 */
+export interface SubAgentDefinitionInfo {
+  id: string;
+  name: string;
+  description: string;
+  tools: string[];
+  prompt: string;
+  providerId?: string | null;
+  modelId?: string | null;
+  maxTurns?: number | null;
+  isActive: boolean;
+  isBuiltIn: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubAgentDefinitionInput {
+  name?: string;
+  description?: string;
+  tools?: string[];
+  prompt?: string;
+  providerId?: string | null;
+  modelId?: string | null;
+  maxTurns?: number | null;
+  isActive?: boolean;
+}
+
+export function listSubAgents(): Promise<SubAgentDefinitionInfo[]> {
+  return apiFetch<{ subagents: SubAgentDefinitionInfo[] }>("/api/subagents")
+    .then((data) => data.subagents);
+}
+
+export function createSubAgent(input: SubAgentDefinitionInput): Promise<SubAgentDefinitionInfo> {
+  return apiFetch<{ subagent: SubAgentDefinitionInfo }>("/api/subagents", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.subagent);
+}
+
+export function updateSubAgent(
+  id: string,
+  input: SubAgentDefinitionInput,
+): Promise<SubAgentDefinitionInfo> {
+  return apiFetch<{ subagent: SubAgentDefinitionInfo }>(`/api/subagents/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }).then((data) => data.subagent);
+}
+
+export function deleteSubAgent(id: string): Promise<void> {
+  return apiFetch(`/api/subagents/${id}`, { method: "DELETE" }).then(() => undefined);
 }
 
 export interface AgentInfo {
@@ -340,6 +409,18 @@ export function decideApproval(
   return apiFetch(`/api/runs/${runId}/approvals/${approvalId}`, {
     method: "POST",
     body: JSON.stringify({ action }),
+  }).then(() => undefined);
+}
+
+/** askUser 卡片提交：answers 与 questions 一一对应，null 表示该题跳过。 */
+export function answerAsk(
+  runId: string,
+  askId: string,
+  answers: Array<string[] | null>,
+): Promise<void> {
+  return apiFetch(`/api/runs/${runId}/asks/${askId}`, {
+    method: "POST",
+    body: JSON.stringify({ answers }),
   }).then(() => undefined);
 }
 

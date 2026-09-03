@@ -40,8 +40,15 @@ import {
 } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import { ImageLightbox } from "@/components/ImageLightbox";
 import { cn } from "@/lib/utils";
-import { messageText, type ChatUIMessage, type ToolPart } from "@/lib/chat-utils";
+import {
+  formatDuration,
+  messageText,
+  type ChatUIMessage,
+  type SubagentEventData,
+  type ToolPart,
+} from "@/lib/chat-utils";
 import { describeTool, type ToolAction } from "@/lib/tool-display";
 
 interface MessageViewProps {
@@ -61,13 +68,18 @@ function MessageViewBase({
 
   // 连续的 reasoning / tool 调用归为一个“活动”块，整块折叠成一行
   // （“处理中 … / 已处理 · N 个步骤”）；其余 part 原样渲染。
-  const blocks = useMemo(() => groupParts(message.parts), [message.parts]);
+  // 委派子智能体的 data-oh:subagent.* 事件先折叠为单张实时卡片。
+  const parts = useMemo(() => collapseSubagentParts(message.parts), [message.parts]);
+  const blocks = useMemo(() => groupParts(parts), [parts]);
 
   const renderAssistantPart = (
-    part: ChatUIMessage["parts"][number],
+    part: RenderablePart,
     index: number,
     isGroupActive: boolean,
   ): ReactNode => {
+    if (part.type === "oh-delegation-card") {
+      return <DelegationCard key={`delegation-${part.data.delegationId}`} data={part.data} />;
+    }
     if (part.type === "text") {
       return (
         <MessageContent key={index}>
@@ -163,6 +175,67 @@ type ActivityItem =
   | { kind: "thinking"; part: ReasoningUIPart }
   | { kind: "tool"; part: ToolPart };
 
+/** 一个后台委派的聚合视图：start/progress/done/error 事件折叠成这一张卡。 */
+interface DelegationCardData {
+  delegationId: string;
+  agentName: string;
+  task?: string;
+  steps: number;
+  currentTool?: string;
+  status: "running" | "completed" | "failed" | "aborted" | "stopped";
+  durationMs?: number;
+  error?: string;
+}
+
+type DelegationCardPart = { type: "oh-delegation-card"; data: DelegationCardData };
+type RenderablePart = ChatUIMessage["parts"][number] | DelegationCardPart;
+
+/** 把同一委派的全部 data-oh:subagent.* 事件折叠为一张卡片（位置取 start
+ * 首次出现处；缺 start 的孤儿事件——例如回放截断——在首次出现处建卡）。 */
+function collapseSubagentParts(parts: ChatUIMessage["parts"]): RenderablePart[] {
+  if (!parts.some((part) => part.type.startsWith("data-oh:subagent."))) return parts;
+  const out: RenderablePart[] = [];
+  const cards = new Map<string, DelegationCardData>();
+  for (const part of parts) {
+    if (!part.type.startsWith("data-oh:subagent.")) {
+      out.push(part);
+      continue;
+    }
+    const data = (part as { data?: SubagentEventData }).data;
+    if (!data) continue;
+    const key = data.delegationId || data.agentName || "unknown";
+    let card = cards.get(key);
+    if (!card) {
+      card = {
+        delegationId: key,
+        agentName: data.agentName || "子智能体",
+        task: data.task,
+        steps: 0,
+        status: "running",
+      };
+      cards.set(key, card);
+      out.push({ type: "oh-delegation-card", data: card });
+    }
+    if (part.type === "data-oh:subagent.start") {
+      if (data.task) card.task = data.task;
+      if (data.agentName) card.agentName = data.agentName;
+    } else if (part.type === "data-oh:subagent.progress") {
+      card.steps = data.steps ?? card.steps;
+      card.currentTool = data.currentTool;
+    } else if (part.type === "data-oh:subagent.done") {
+      card.status = data.status ?? "completed";
+      card.durationMs = data.durationMs;
+      card.steps = data.steps ?? card.steps;
+      card.currentTool = undefined;
+    } else if (part.type === "data-oh:subagent.error") {
+      card.status = "failed";
+      card.error = data.error;
+      card.currentTool = undefined;
+    }
+  }
+  return out;
+}
+
 /** 把消息里的裸 URL 转成 markdown 链接（dev server 地址等），点击后由
  * ChatPane 的捕获层送进内置浏览器面板。跳过代码围栏与行内代码，避免
  * 改写代码内容；已处在链接语法里的 URL（前邻 [ 或 ( ）不再重复包一层。 */
@@ -191,9 +264,9 @@ function linkifyUrls(text: string): string {
 
 type AssistantBlock =
   | { kind: "activity"; items: ActivityItem[] }
-  | { kind: "part"; part: ChatUIMessage["parts"][number] };
+  | { kind: "part"; part: RenderablePart };
 
-function groupParts(parts: ChatUIMessage["parts"]): AssistantBlock[] {
+function groupParts(parts: RenderablePart[]): AssistantBlock[] {
   const blocks: AssistantBlock[] = [];
   let activity: ActivityItem[] | null = null;
   const flush = () => {
@@ -206,7 +279,7 @@ function groupParts(parts: ChatUIMessage["parts"]): AssistantBlock[] {
       activity.push({ kind: "thinking", part });
       return;
     }
-    if (isToolUIPart(part)) {
+    if (part.type !== "oh-delegation-card" && isToolUIPart(part)) {
       activity = activity ?? [];
       activity.push({ kind: "tool", part });
       return;
@@ -274,6 +347,7 @@ const ACTION_ICONS: Record<ToolAction, typeof WrenchIcon> = {
   run: TerminalIcon,
   git: GitBranchIcon,
   task: ListTodoIcon,
+  delegate: BotIcon,
   use: WrenchIcon,
 };
 
@@ -319,6 +393,92 @@ function StatusPill({ state }: { state: ToolPart["state"] }) {
     </span>
   );
 }
+
+/** PI 式委派卡片：一行头部（子智能体名 + 实时步骤/状态），展开看任务简报。
+ * 运行中实时计时并在折叠头显示当前内部工具；结束后收起为“已完成 · N 个步骤 · 时长”。 */
+const DelegationCard = memo(function DelegationCard({ data }: { data: DelegationCardData }) {
+  const running = data.status === "running";
+  const [open, setOpen] = useState(running);
+  const wasRunningRef = useRef(running);
+
+  // 运行→结束时自动收起；再次开始（同 id 复用极罕见）则重新展开。
+  useEffect(() => {
+    if (wasRunningRef.current !== running) {
+      setOpen(running);
+      wasRunningRef.current = running;
+    }
+  }, [running]);
+
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    setElapsed(0);
+    const startedAt = Date.now();
+    const id = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [running]);
+
+  const failed = data.status === "failed";
+  const stopped = data.status === "stopped" || data.status === "aborted";
+  const duration = data.durationMs
+    ? formatDuration(data.durationMs)
+    : running
+      ? `${elapsed}s`
+      : "";
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="group/delegation w-full">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+        <BotIcon className="size-3.5 shrink-0" />
+        <span className="shrink-0 font-mono">{data.agentName}</span>
+        {running ? (
+          <Shimmer
+            as="span"
+            duration={1.6}
+          >{`运行中${data.steps > 0 ? ` · ${data.steps} 个步骤` : ""}`}</Shimmer>
+        ) : failed ? (
+          <span className="flex shrink-0 items-center gap-1 text-red-600">
+            <XCircleIcon className="size-3" />
+            失败
+          </span>
+        ) : stopped ? (
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            <MinusIcon className="size-3" />
+            已停止
+          </span>
+        ) : (
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            <CheckIcon className="size-3 text-green-600" />
+            已完成
+          </span>
+        )}
+        {!running && data.steps > 0 ? (
+          <span className="shrink-0">· {data.steps} 个步骤</span>
+        ) : null}
+        {duration ? <span className="shrink-0 text-[11px]">· {duration}</span> : null}
+        {running && data.currentTool ? (
+          <span className="min-w-0 flex-1 truncate font-mono">{data.currentTool}…</span>
+        ) : (
+          <span className="min-w-0 flex-1" />
+        )}
+        <ChevronRightIcon className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]/delegation:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="outline-none">
+        <div className="ml-3 space-y-1.5 border-l py-1 pl-3 text-xs text-muted-foreground">
+          {data.task ? (
+            <p className="whitespace-pre-wrap break-words">{data.task}</p>
+          ) : null}
+          {failed && data.error ? (
+            <p className="break-words text-red-600">{data.error}</p>
+          ) : null}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+});
 
 /** Successful edit-tool outputs carry the before/after diff; render it as a
  * diff card instead of the raw JSON dump ToolOutput would print. */
@@ -551,13 +711,29 @@ function activityItemSummary(item: ActivityItem): string {
 }
 
 function FilePartView({ part }: { part: FileUIPart }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
   if (part.mediaType.startsWith("image/")) {
     return (
-      <img
-        src={part.url}
-        alt={part.filename ?? "附件"}
-        className="max-h-40 rounded-md border"
-      />
+      <>
+        <button
+          type="button"
+          title="点击预览"
+          className="block cursor-zoom-in rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => setPreviewOpen(true)}
+        >
+          <img
+            src={part.url}
+            alt={part.filename ?? "附件"}
+            className="max-h-40 rounded-md border"
+          />
+        </button>
+        <ImageLightbox
+          src={part.url}
+          filename={part.filename}
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
+        />
+      </>
     );
   }
   return (
@@ -572,25 +748,7 @@ type DataPart = ChatUIMessage["parts"][number];
 
 function DataPartView({ part }: { part: DataPart }): ReactNode {
   switch (part.type) {
-    case "data-oh:subagent.start":
-      return (
-        <SystemNote icon={<BotIcon className="size-3.5" />}>
-          子 Agent <strong>{part.data.agentName}</strong> 已启动：{part.data.task}
-        </SystemNote>
-      );
-    case "data-oh:subagent.done":
-      return (
-        <SystemNote icon={<BotIcon className="size-3.5" />}>
-          子 Agent <strong>{part.data.agentName}</strong> 已完成，耗时{" "}
-          {(part.data.durationMs / 1000).toFixed(1)} 秒
-        </SystemNote>
-      );
-    case "data-oh:subagent.error":
-      return (
-        <SystemNote icon={<BotIcon className="size-3.5" />}>
-          子 Agent <strong>{part.data.agentName}</strong> 失败：{part.data.error}
-        </SystemNote>
-      );
+    // data-oh:subagent.* 在 collapseSubagentParts 里已折叠为 DelegationCard。
     case "data-oh:compaction.done":
       return (
         <SystemNote icon={<SquareStackIcon className="size-3.5" />}>

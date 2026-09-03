@@ -6,10 +6,9 @@ import {
   updateAgent,
   type AgentInfo,
   type ProviderInfo,
-  type SubAgentInfo,
 } from "@/api";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -52,7 +51,6 @@ export function AgentFormSheet({
   const [isActive, setIsActive] = useState(true);
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");
-  const [subAgentsText, setSubAgentsText] = useState("[]");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -64,7 +62,6 @@ export function AgentFormSheet({
     setIsActive(initial?.isActive ?? true);
     setProviderId(initial?.defaultProviderId ?? "");
     setModelId(initial?.defaultModelId ?? "");
-    setSubAgentsText(initial ? JSON.stringify(initial.subAgents, null, 2) : "[]");
     setError(undefined);
   }, [initial, open]);
 
@@ -82,16 +79,6 @@ export function AgentFormSheet({
       return;
     }
 
-    let subAgents: SubAgentInfo[];
-    try {
-      const parsed = JSON.parse(subAgentsText) as unknown;
-      if (!Array.isArray(parsed)) throw new Error("子 Agent 必须是 JSON 数组");
-      subAgents = parsed as SubAgentInfo[];
-    } catch (cause) {
-      setError(cause instanceof Error ? `子 Agent JSON 无效：${cause.message}` : "子 Agent JSON 无效");
-      return;
-    }
-
     setSaving(true);
     setError(undefined);
     try {
@@ -100,7 +87,9 @@ export function AgentFormSheet({
         description: description.trim(),
         instructions: instructions.trim(),
         isActive,
-        subAgents,
+        // 旧版 Mastra 网络子 Agent 已被“设置 → 子智能体”的委派系统取代；
+        // 编辑时原样回传已存值，避免误清历史数据。
+        subAgents: initial?.subAgents ?? [],
         defaultProviderId: providerId || null,
         defaultModelId: providerId ? modelId || null : null,
       };
@@ -183,18 +172,6 @@ export function AgentFormSheet({
                   </SelectContent>
                 </Select>
               </div>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="agent-subagents">子 Agent</FieldLabel>
-              <Textarea
-                id="agent-subagents"
-                className="min-h-48 font-mono text-xs"
-                value={subAgentsText}
-                onChange={(event) => setSubAgentsText(event.target.value)}
-              />
-              <FieldDescription>
-                JSON 数组；每个子 Agent 包含 id、name、description 和 instructions。
-              </FieldDescription>
             </Field>
             <Field orientation="horizontal">
               <FieldLabel>启用</FieldLabel>
