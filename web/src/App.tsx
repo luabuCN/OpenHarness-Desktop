@@ -557,6 +557,7 @@ function SessionView({
           busy={busy}
           contextWindow={contextWindow}
           previewTarget={previewTarget}
+          onOpenLink={handleOpenLink}
         />
       ) : null}
     </>

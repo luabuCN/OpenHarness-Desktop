@@ -3,7 +3,7 @@ import type { ToolPart } from "@/lib/chat-utils";
 /** 动作类别决定一行式工具调用的图标与措辞（参考 PI-Desktop 的 ToolRow）。 */
 export type ToolAction =
   | "read" | "list" | "search" | "write" | "edit" | "run" | "git" | "task"
-  | "delegate" | "use";
+  | "delegate" | "browse" | "use";
 
 export interface ToolDisplay {
   action: ToolAction;
@@ -144,6 +144,23 @@ export function describeTool(part: ToolPart): ToolDisplay {
         // 命令可能很长，只取首行再截断
         summary: truncateSummary(firstLine(pickString(input, ["command"]) ?? "")),
       };
+    case "webSearch":
+      return {
+        action: "search",
+        verb: "搜索网页",
+        runningVerb: running("搜索"),
+        summary: summaryOf(input),
+      };
+    case "webFetch": {
+      const url = pickString(input, ["url"]) ?? "";
+      return {
+        action: "browse",
+        verb: "读取网页",
+        runningVerb: running("读取网页"),
+        // 网址展示时去掉协议前缀，给摘要腾出空间
+        summary: truncateSummary(url.replace(/^https?:\/\//, "")),
+      };
+    }
     case "announce":
       return { action: "use", verb: "播报", runningVerb: running("播报"), summary: summaryOf(input) };
     case "askUser": {

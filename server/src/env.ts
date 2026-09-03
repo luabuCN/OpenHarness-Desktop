@@ -31,4 +31,8 @@ export const config = {
   port: Number(process.env.PORT ?? process.env.OPENHARNESS_PORT ?? 8878),
   enableBash: process.env.OPENHARNESS_ENABLE_BASH === "true",
   contextWindow: Number(process.env.OPENHARNESS_CONTEXT_WINDOW ?? 128_000),
+  /** webSearch 工具的 API key；缺省时优先复用已配置的智谱供应商 key，再降级到免 key 抓取。 */
+  webSearchApiKey: process.env.OPENHARNESS_WEBSEARCH_API_KEY,
+  /** webSearch 引擎：zhipu / bocha / tavily / brave / sogou / duckduckgo / auto（默认 auto）。 */
+  webSearchEngine: process.env.OPENHARNESS_WEBSEARCH_ENGINE,
 };

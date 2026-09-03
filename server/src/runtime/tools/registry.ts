@@ -6,6 +6,7 @@ import { GitToolProvider } from "./git-provider.js";
 import { resolveToolPolicies } from "./policies.js";
 import { createRunContext, type RunContext } from "./run-context.js";
 import { TaskToolProvider } from "./task-provider.js";
+import { WebSearchToolProvider } from "./websearch-provider.js";
 import { WorkspaceToolProvider } from "./workspace-provider.js";
 import type {
   ApprovalBridge,
@@ -241,3 +242,4 @@ toolProviderRegistry.register(new GitToolProvider());
 toolProviderRegistry.register(new TaskToolProvider());
 toolProviderRegistry.register(new AskUserToolProvider());
 toolProviderRegistry.register(new DelegationToolProvider());
+toolProviderRegistry.register(new WebSearchToolProvider());

@@ -40,6 +40,12 @@ import {
 } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ToolInput, ToolOutput } from "@/components/ai-elements/tool";
+import {
+  extractWebFetchOutput,
+  extractWebSearchOutput,
+  WebFetchContent,
+  WebSearchResults,
+} from "@/components/ai-elements/web-results";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { cn } from "@/lib/utils";
 import {
@@ -348,6 +354,7 @@ const ACTION_ICONS: Record<ToolAction, typeof WrenchIcon> = {
   git: GitBranchIcon,
   task: ListTodoIcon,
   delegate: BotIcon,
+  browse: GlobeIcon,
   use: WrenchIcon,
 };
 
@@ -542,6 +549,9 @@ const ToolLine = memo(
     const select = () => onToolSelect?.(part.toolCallId);
     const editDiff = extractEditDiff(title, part);
     const gitDiffText = extractGitDiff(title, part);
+    // webSearch/webFetch 成功时用专属卡片代替输入/输出 JSON（卡片头部已带查询词或网址）
+    const searchOutput = extractWebSearchOutput(title, part);
+    const fetchOutput = extractWebFetchOutput(title, part);
 
     return (
       <Collapsible open={open} onOpenChange={setOpen} className="group/tool w-full">
@@ -571,9 +581,11 @@ const ToolLine = memo(
         </CollapsibleTrigger>
         <CollapsibleContent className="outline-none">
           <div className="ml-3 space-y-3 border-l py-1 pl-3">
-            {"input" in part && part.input !== undefined ? (
+            {"input" in part && part.input !== undefined && !searchOutput && !fetchOutput ? (
               <ToolInput input={part.input} />
             ) : null}
+            {searchOutput ? <WebSearchResults output={searchOutput} /> : null}
+            {fetchOutput ? <WebFetchContent output={fetchOutput} /> : null}
             {editDiff ? (
               <div className="space-y-2">
                 <DiffCard
@@ -591,7 +603,7 @@ const ToolLine = memo(
             {gitDiffText ? (
               <DiffCard title="git diff" diff={gitDiffText} defaultOpen={false} />
             ) : null}
-            {editDiff ? null : (
+            {editDiff || searchOutput || fetchOutput ? null : (
               <ToolOutput
                 output={"output" in part ? part.output : undefined}
                 errorText={"errorText" in part ? part.errorText : undefined}

@@ -53,6 +53,23 @@ OPENAI_MODEL=qwen3.8-max
 
 SQLite 数据也放在同一个数据目录，不会写入安装目录。
 
+### 网页搜索
+
+`webSearch` / `webFetch` 工具开箱可用，无需额外配置时按以下顺序选择搜索引擎：
+
+1. 复用设置里已配置的**智谱**模型供应商 key（apiBase 含 `bigmodel.cn`）调用智谱 web_search / reader；
+2. `.env` 中的 `OPENHARNESS_WEBSEARCH_API_KEY`（按 key 前缀自动识别引擎：`tvly-` → Tavily、`sk-` → 博查、其余 → Brave）；
+3. 免 key 兜底：直接抓取搜狗 / DuckDuckGo 结果页。
+
+可选环境变量：
+
+```dotenv
+# 搜索 API key（Tavily / 博查 / Brave / 智谱，任选其一）
+OPENHARNESS_WEBSEARCH_API_KEY=tvly-...
+# 强制指定引擎：zhipu / bocha / tavily / brave / sogou / duckduckgo / auto（默认 auto）
+OPENHARNESS_WEBSEARCH_ENGINE=auto
+```
+
 ## 安全边界
 
 - API 只监听 `127.0.0.1`

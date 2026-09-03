@@ -21,6 +21,12 @@ import {
   FileTreeFolder,
 } from "@/components/ai-elements/file-tree";
 import { getStatusBadge, ToolInput, stringifyToolOutput } from "@/components/ai-elements/tool";
+import {
+  extractWebFetchOutput,
+  extractWebSearchOutput,
+  WebFetchContent,
+  WebSearchResults,
+} from "@/components/ai-elements/web-results";
 import { BrowserPane, type PreviewTarget } from "@/components/BrowserPane";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { GitPanel } from "@/components/GitPanel";
@@ -64,6 +70,8 @@ export interface RightPanelProps {
   contextWindow?: number;
   /** 内置浏览器面板当前加载的预览目标。 */
   previewTarget: PreviewTarget | null;
+  /** 工具结果里的链接点击后送进内置浏览器面板（与聊天链接行为一致）。 */
+  onOpenLink?: (url: string) => void;
 }
 
 function RightPanelBase({
@@ -79,6 +87,7 @@ function RightPanelBase({
   busy,
   contextWindow,
   previewTarget,
+  onOpenLink,
 }: RightPanelProps) {
   return (
     <aside
@@ -151,6 +160,7 @@ function RightPanelBase({
             messages={messages}
             selectedToolId={selectedToolId}
             onToolSelect={onToolSelect}
+            onOpenLink={onOpenLink}
           />
         </TabsContent>
         <TabsContent value="usage" className="m-0 min-h-0 flex-1 overflow-y-auto p-3">
@@ -474,10 +484,12 @@ function ToolResults({
   messages,
   selectedToolId,
   onToolSelect,
+  onOpenLink,
 }: {
   messages: ChatUIMessage[];
   selectedToolId?: string;
   onToolSelect: (id: string) => void;
+  onOpenLink?: (url: string) => void;
 }) {
   // messages changes identity on every stream chunk while this tab is open;
   // the scan is O(all parts), so memoize instead of running it per chunk.
@@ -507,12 +519,12 @@ function ToolResults({
           </button>
         ))}
       </div>
-      {selected ? <ToolDetail call={selected} /> : null}
+      {selected ? <ToolDetail call={selected} onOpenLink={onOpenLink} /> : null}
     </div>
   );
 }
 
-function ToolDetail({ call }: { call: ToolCallRef }) {
+function ToolDetail({ call, onOpenLink }: { call: ToolCallRef; onOpenLink?: (url: string) => void }) {
   const { part } = call;
   const name = toolNameOf(part);
   const output = "output" in part ? part.output : undefined;
@@ -536,6 +548,8 @@ function ToolDetail({ call }: { call: ToolCallRef }) {
     name === "gitDiff" && typeof outputRecord?.diff === "string" && outputRecord.diff !== "(no changes)"
       ? (outputRecord.diff as string)
       : undefined;
+  const searchOutput = extractWebSearchOutput(name, part);
+  const fetchOutput = extractWebFetchOutput(name, part);
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
@@ -564,6 +578,10 @@ function ToolDetail({ call }: { call: ToolCallRef }) {
         />
       ) : gitDiffText ? (
         <DiffCard title="git diff" diff={gitDiffText} />
+      ) : searchOutput ? (
+        <WebSearchResults output={searchOutput} onOpenLink={onOpenLink} />
+      ) : fetchOutput ? (
+        <WebFetchContent output={fetchOutput} />
       ) : output !== undefined ? (
         <CodeBlock
           code={
