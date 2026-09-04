@@ -8,8 +8,6 @@ import {
   ImageIcon,
   InfoIcon,
   LoaderCircleIcon,
-  PanelRightCloseIcon,
-  PanelRightOpenIcon,
   SparklesIcon,
 } from "lucide-react";
 import {
@@ -33,10 +31,7 @@ import {
   PromptInputTools,
   usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { Button } from "@/components/ui/button";
-import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
 import type {
   ApprovalAction,
   ApprovalInfo,
@@ -61,12 +56,6 @@ import { AskUserPrompt } from "./AskUserPrompt";
 import { PermissionModeSelector } from "./PermissionModeSelector";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 
-const SUGGESTIONS = [
-  "列出工作区中的文件",
-  "我正在使用什么操作系统和 Shell？",
-  "总结一下这个工作区的内容",
-];
-
 /** 单个附件的大小上限；PDF/Word/表格以 data URL 形式随消息发送，过大
  * 的文件会显著拖慢请求与每轮重放，超限时在前端直接拦截。 */
 const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
@@ -79,7 +68,6 @@ export interface TurnOutcomeNote {
 
 export interface ChatPaneProps {
   chat: UseChatHelpers<ChatUIMessage>;
-  title: string;
   providers: ProviderInfo[];
   displaySelection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
@@ -91,8 +79,6 @@ export interface ChatPaneProps {
   onAgentChange: (agentId: string) => void;
   selectedToolId?: string;
   onToolSelect: (id: string) => void;
-  panelOpen: boolean;
-  onTogglePanel: () => void;
   projects: ProjectInfo[];
   projectId?: string;
   onProjectChange: (projectId?: string) => void;
@@ -119,7 +105,6 @@ export interface ChatPaneProps {
 
 export function ChatPane({
   chat,
-  title,
   providers,
   displaySelection,
   onSelectionChange,
@@ -131,8 +116,6 @@ export function ChatPane({
   onAgentChange,
   selectedToolId,
   onToolSelect,
-  panelOpen,
-  onTogglePanel,
   projects,
   projectId,
   onProjectChange,
@@ -322,35 +305,21 @@ export function ChatPane({
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
-      {/* 与右侧面板的标签栏（h-9）保持同一高度，顶部分隔线才对齐。 */}
-      <header className="flex h-9 shrink-0 items-center justify-between gap-3 border-b px-4">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <SidebarPeekTrigger />
-          <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={onTogglePanel}
-          title={panelOpen ? "折叠面板" : "展开面板"}
-          aria-label={panelOpen ? "折叠面板" : "展开面板"}
-        >
-          {panelOpen ? (
-            <PanelRightCloseIcon className="size-4" />
-          ) : (
-            <PanelRightOpenIcon className="size-4" />
-          )}
-        </Button>
-      </header>
-
       <MessageLinkContext.Provider value={onOpenLink}>
         <Conversation onClickCapture={handleLinkClickCapture}>
-          <ConversationContent className="mx-auto w-full max-w-5xl gap-6 py-6">
+          <ConversationContent className="mx-auto min-h-full w-full max-w-5xl gap-6 py-6">
             {chat.messages.length === 0 ? (
-              <ConversationEmptyState
-                title="本地工作区已就绪"
-                description="可以询问文件相关内容、粘贴图片，或直接开始新任务。"
-              />
+              <ConversationEmptyState className="flex-1 gap-4">
+                <img
+                  src={`${import.meta.env.BASE_URL}bloub.gif`}
+                  alt=""
+                  draggable={false}
+                  className="size-28 select-none object-contain"
+                />
+                <h2 className="text-3xl leading-tight text-foreground">
+                  今天想做点什么？
+                </h2>
+              </ConversationEmptyState>
             ) : (
               chat.messages.map((message) => (
                 <MessageView
@@ -365,17 +334,6 @@ export function ChatPane({
             {waiting ? <AssistantLoadingView effort={reasoningEffort} /> : null}
             {!busy && turnNote ? <TurnNoteView note={turnNote} /> : null}
             {!busy && error ? <AssistantErrorView message={error} /> : null}
-            {chat.messages.length === 0 ? (
-              <Suggestions className="justify-center">
-                {SUGGESTIONS.map((suggestion) => (
-                  <Suggestion
-                    key={suggestion}
-                    suggestion={suggestion}
-                    onClick={(text) => void chat.sendMessage({ text })}
-                  />
-                ))}
-              </Suggestions>
-            ) : null}
           </ConversationContent>
           <ConversationMinimap messages={chat.messages} />
           <ConversationScrollButton />

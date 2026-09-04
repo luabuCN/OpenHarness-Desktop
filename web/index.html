@@ -3,7 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenHarness Desktop</title>
+    <title>eva ai</title>
+    <script>
+      // 深色主题预加载：在首帧之前把 .dark 挂到 <html>，避免暗色用户看到白闪。
+      try {
+        var theme = localStorage.getItem("openharness.theme") || "system";
+        if (
+          theme === "dark" ||
+          (theme === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches)
+        ) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (error) {
+        /* localStorage 不可用时保持默认浅色 */
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -8,16 +8,20 @@ datasource db {
 }
 
 model Conversation {
-  id        String          @id
-  title     String          @default("New chat")
-  projectId String?
-  project   Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
-  messages  StoredMessage[]
-  runs      ThreadRun[]
-  tasks     AgentTask[]
-  changes   FileChange[]
+  id          String          @id
+  title       String          @default("New chat")
+  /// 手动重命名后锁定，避免自动标题（最后一条用户消息）再次覆盖。
+  titleLocked Boolean         @default(false)
+  pinned      Boolean         @default(false)
+  archivedAt  DateTime?
+  projectId   String?
+  project     Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  messages    StoredMessage[]
+  runs        ThreadRun[]
+  tasks       AgentTask[]
+  changes     FileChange[]
 }
 
 model StoredMessage {
@@ -56,6 +60,8 @@ model Project {
   defaultModelId    String?
   toolPermissions   String?
   isActive          Boolean        @default(true)
+  pinned            Boolean        @default(false)
+  archivedAt        DateTime?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   conversations     Conversation[]

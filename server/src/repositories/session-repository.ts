@@ -33,12 +33,18 @@ export const sessionRepository = {
 
   async list() {
     // 附带每个会话当前进行中的运行状态，侧栏据此渲染"后台运行中"状态点。
+    // 归档会话与归档项目下的会话都不在侧栏展示（设置页的归档分区单独列出）。
     const conversations = await prisma.conversation.findMany({
-      orderBy: { updatedAt: "desc" },
+      where: {
+        archivedAt: null,
+        OR: [{ projectId: null }, { project: { archivedAt: null } }],
+      },
+      orderBy: [{ pinned: "desc" }, { updatedAt: "desc" }],
       select: {
         id: true,
         title: true,
         projectId: true,
+        pinned: true,
         createdAt: true,
         updatedAt: true,
         runs: {
@@ -53,6 +59,23 @@ export const sessionRepository = {
       ...session,
       activeRunStatus: runs[0]?.status ?? null,
     }));
+  },
+
+  /** 归档会话列表（设置页归档分区用），按归档时间倒序。 */
+  async listArchived() {
+    return prisma.conversation.findMany({
+      where: { archivedAt: { not: null } },
+      orderBy: { archivedAt: "desc" },
+      select: {
+        id: true,
+        title: true,
+        projectId: true,
+        pinned: true,
+        createdAt: true,
+        updatedAt: true,
+        archivedAt: true,
+      },
+    });
   },
 
   async findWithUIMessages(id: string) {
@@ -79,7 +102,41 @@ export const sessionRepository = {
   },
 
   async saveUIMessages(id: string, messages: ChatUIMessage[], title?: string) {
-    await saveUIMessages(id, messages, title ?? messageTitle(messages));
+    // 手动重命名过的会话不再被自动标题覆盖。
+    const conversation = await prisma.conversation.findUnique({
+      where: { id },
+      select: { titleLocked: true },
+    });
+    const nextTitle = conversation?.titleLocked
+      ? undefined
+      : title ?? messageTitle(messages);
+    await saveUIMessages(id, messages, nextTitle);
+  },
+
+  /**
+   * 更新会话元数据：手动重命名（锁定标题）、置顶/取消置顶、归档/恢复。
+   * 重命名同时写 titleLocked，之后保存消息不会再覆盖标题。
+   */
+  async update(
+    id: string,
+    input: { title?: string; pinned?: boolean; archived?: boolean },
+  ) {
+    const data: { title?: string; titleLocked?: boolean; pinned?: boolean; archivedAt?: Date | null } = {};
+    if (input.title !== undefined) {
+      data.title = input.title;
+      data.titleLocked = true;
+    }
+    if (input.pinned !== undefined) data.pinned = input.pinned;
+    if (input.archived !== undefined) data.archivedAt = input.archived ? new Date() : null;
+
+    // 会话可能尚未落库（前端本地生成的 id 在首条消息前不存在），
+    // 先按默认行建立再更新，保证侧栏操作不因 404 报错。
+    await prisma.conversation.upsert({
+      where: { id },
+      update: {},
+      create: { id },
+    });
+    return prisma.conversation.update({ where: { id }, data });
   },
 
   async delete(id: string) {

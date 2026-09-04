@@ -7,9 +7,38 @@ export interface SessionSummary {
   id: string;
   title: string;
   projectId?: string | null;
+  pinned?: boolean;
   createdAt: string;
   updatedAt: string;
   activeRunStatus?: ActiveRunStatus | null;
+}
+
+/** 设置页归档分区里的会话行，比侧栏摘要多一个归档时间。 */
+export interface ArchivedSessionSummary extends SessionSummary {
+  archivedAt: string;
+}
+
+export interface SessionUpdateInput {
+  title?: string;
+  pinned?: boolean;
+  archived?: boolean;
+}
+
+/** 更新会话元数据：重命名 / 置顶 / 归档（archived: false 为恢复）。 */
+export function updateSession(id: string, input: SessionUpdateInput): Promise<SessionSummary> {
+  return apiFetch<{ session: SessionSummary }>(`/api/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  }).then((data) => data.session);
+}
+
+export function listArchivedSessions(): Promise<ArchivedSessionSummary[]> {
+  return apiFetch<{ sessions: ArchivedSessionSummary[] }>("/api/sessions/archived")
+    .then((data) => data.sessions);
+}
+
+export function deleteSession(id: string): Promise<void> {
+  return apiFetch(`/api/sessions/${id}`, { method: "DELETE" }).then(() => undefined);
 }
 
 export interface HealthInfo {
@@ -127,6 +156,8 @@ export interface ProjectInfo {
   defaultProviderId?: string | null;
   defaultModelId?: string | null;
   isActive: boolean;
+  pinned?: boolean;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -422,9 +453,14 @@ export function createProject(input: Pick<ProjectInfo, "name" | "rootPath"> & Pa
   }).then((data) => data.project);
 }
 
+export interface ProjectUpdateInput extends Partial<Pick<ProjectInfo, "name" | "rootPath"> & ProjectInfo> {
+  /** true = 归档项目，false = 恢复（服务端写入/清空 archivedAt）。 */
+  archived?: boolean;
+}
+
 export function updateProject(
   id: string,
-  input: Partial<Pick<ProjectInfo, "name" | "rootPath"> & ProjectInfo>,
+  input: ProjectUpdateInput,
 ): Promise<ProjectInfo> {
   return apiFetch<{ project: ProjectInfo }>(`/api/projects/${id}`, {
     method: "PUT",

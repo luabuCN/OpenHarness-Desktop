@@ -15,6 +15,9 @@ const createProjectSchema = z.object({
 
 const updateProjectSchema = createProjectSchema.partial().extend({
   isActive: z.boolean().optional(),
+  pinned: z.boolean().optional(),
+  /** true = 归档（写入 archivedAt），false = 恢复（清空）。 */
+  archived: z.boolean().optional(),
 });
 
 async function assertRootDirectory(value: string): Promise<string> {
@@ -73,7 +76,8 @@ export const projectRoutes = new Hono();
 
 projectRoutes.get("/", async (c) => {
   const projects = await prisma.project.findMany({
-    orderBy: { createdAt: "asc" },
+    // 置顶项目排前，其余保持创建顺序；归档项目也返回，由前端分区展示。
+    orderBy: [{ pinned: "desc" }, { createdAt: "asc" }],
     include: { _count: { select: { conversations: true } } },
   });
   return c.json({
@@ -114,7 +118,7 @@ projectRoutes.put("/:id", async (c) => {
     }
   }
 
-  const { rootPath: requestedRootPath, ...data } = input;
+  const { rootPath: requestedRootPath, archived, ...data } = input;
   void requestedRootPath;
   try {
     const current = await prisma.project.findUnique({ where: { id: c.req.param("id") } });
@@ -127,6 +131,7 @@ projectRoutes.put("/:id", async (c) => {
     where: { id: c.req.param("id") },
     data: {
       ...data,
+      ...(archived === undefined ? {} : { archivedAt: archived ? new Date() : null }),
       ...(nextRootPath ? { rootPath: nextRootPath } : {}),
     },
   });

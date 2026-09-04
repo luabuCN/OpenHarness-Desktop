@@ -82,6 +82,15 @@ export async function ensureSchema() {
     ALTER TABLE "Conversation" ADD COLUMN "projectId" TEXT
       REFERENCES "Project"("id") ON DELETE SET NULL ON UPDATE CASCADE
   `);
+  await addColumnIfMissing(`
+    ALTER TABLE "Conversation" ADD COLUMN "titleLocked" BOOLEAN NOT NULL DEFAULT false
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "Conversation" ADD COLUMN "pinned" BOOLEAN NOT NULL DEFAULT false
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "Conversation" ADD COLUMN "archivedAt" DATETIME
+  `);
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "Conversation_projectId_idx" ON "Conversation" ("projectId")',
   );
@@ -230,6 +239,12 @@ export async function ensureSchema() {
   `);
   await addColumnIfMissing(`
     ALTER TABLE "Project" ADD COLUMN "toolPermissions" TEXT
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "Project" ADD COLUMN "pinned" BOOLEAN NOT NULL DEFAULT false
+  `);
+  await addColumnIfMissing(`
+    ALTER TABLE "Project" ADD COLUMN "archivedAt" DATETIME
   `);
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "ToolRecord" (

@@ -101,7 +101,8 @@ function RightPanelBase({
       >
         {/* 标签条保持单行紧凑：纵向禁止滚动（激活项下划线伪元素会溢出 5px），
             横向可滚但隐藏滚动条——8px 的全局滚动条在标签栏下太笨重。
-            选中态只用淡主题色背景，不加边框和阴影。 */}
+            选中态只用淡主题色背景，不加边框和阴影。标签条位于窗口
+            标题栏下方，右端不会被自绘窗口按钮遮挡。 */}
         <TabsList className="group-data-[orientation=horizontal]/tabs:h-9 w-full shrink-0 justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none border-b bg-transparent px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <TabsTrigger value="files" className={TAB_TRIGGER_CLASS}>
             <FolderOpenIcon className="size-3.5" />

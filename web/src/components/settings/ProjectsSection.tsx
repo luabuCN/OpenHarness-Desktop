@@ -120,7 +120,9 @@ export function ProjectsSection({ onChanged }: ProjectsSectionProps) {
           </p>
         ) : (
           <div className="flex flex-col gap-2 p-4">
-            {projects.map((project) => {
+            {projects
+              .filter((project) => !project.archivedAt)
+              .map((project) => {
               const agent = agents.find((entry) => entry.id === project.defaultAgentId);
               const provider = providers.find((entry) => entry.id === project.defaultProviderId);
               const model = provider?.models.find((entry) => entry.id === project.defaultModelId);

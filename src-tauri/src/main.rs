@@ -1,9 +1,36 @@
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{Manager, RunEvent};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_shell::ShellExt;
 
 struct SidecarChild(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
+
+/// 关闭主窗口时的行为："tray" = 隐藏到托盘，"quit" = 退出应用。
+/// 默认 tray；前端启动时和设置变更时通过 set_close_behavior 命令同步。
+#[derive(Default)]
+struct CloseBehavior(Mutex<String>);
+
+#[tauri::command]
+fn set_close_behavior(
+    behavior: String,
+    state: tauri::State<CloseBehavior>,
+) -> Result<(), String> {
+    if !matches!(behavior.as_str(), "tray" | "quit") {
+        return Err(format!("unknown close behavior: {behavior}"));
+    }
+    *state.0.lock().map_err(|error| error.to_string())? = behavior;
+    Ok(())
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
 
 fn port_in_use(host: &str, port: u16) -> bool {
     let addr = format!("{host}:{port}")
@@ -17,7 +44,54 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![set_close_behavior])
+        .on_window_event(|window, event| {
+            // 关闭行为为 tray 时拦截关闭，仅隐藏窗口；quit 时走默认关闭流程
+            // （最后一个窗口关闭即退出应用，RunEvent::Exit 会带走 sidecar）。
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let use_tray = window
+                    .app_handle()
+                    .state::<CloseBehavior>()
+                    .0
+                    .lock()
+                    .map(|behavior| behavior.as_str() != "quit")
+                    .unwrap_or(true);
+                if use_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
+            app.manage(CloseBehavior(Mutex::new("tray".to_string())));
+
+            let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let quit_item =
+                MenuItem::with_id(app, "quit", "退出 eva ai", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            TrayIconBuilder::with_id("main-tray")
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("eva ai")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
 

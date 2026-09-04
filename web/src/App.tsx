@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { PanelRightCloseIcon, PanelRightOpenIcon } from "lucide-react";
 import { useChat, type UseChatHelpers } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -13,7 +14,11 @@ import {
   abortConversation,
   answerAsk,
   decideApproval,
+  deleteProject as apiDeleteProject,
+  deleteSession as apiDeleteSession,
   isPermissionMode,
+  updateProject,
+  updateSession,
   type ApprovalAction,
   type AskUserInfo,
   type ModelSelection,
@@ -32,6 +37,14 @@ import type { PreviewTarget } from "./components/BrowserPane";
 import { defaultModelSelection } from "./components/ModelSelector";
 import { RightPanel, type RightTab } from "./components/RightPanel";
 import { AppSidebar } from "./components/AppSidebar";
+import { Button } from "@/components/ui/button";
+import { SidebarPeekTrigger } from "@/components/SidebarPeekTrigger";
+import {
+  isTauriWindow,
+  WindowControls,
+  windowControlsReserveClass,
+} from "@/components/WindowControls";
+import { cn } from "@/lib/utils";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { lastAssistantHasText } from "./lib/chat-utils";
@@ -42,7 +55,10 @@ const REASONING_EFFORT_KEY = "openharness.reasoningEffort";
 
 function sessionsSignature(sessions: SessionSummary[]): string {
   return sessions
-    .map((session) => `${session.id}:${session.title}:${session.updatedAt}:${session.activeRunStatus ?? ""}`)
+    .map(
+      (session) =>
+        `${session.id}:${session.title}:${session.pinned ? 1 : 0}:${session.updatedAt}:${session.activeRunStatus ?? ""}`,
+    )
     .join("|");
 }
 
@@ -500,67 +516,94 @@ function SessionView({
   );
 
   return (
-    <>
-      <ChatPane
-        chat={chat}
-        title={title}
-        providers={providers}
-        displaySelection={displaySelection}
-        onSelectionChange={onSelectionChange}
-        reasoningEffort={reasoningEffort}
-        onReasoningEffortChange={onReasoningEffortChange}
-        permissionMode={permissionMode}
-        onPermissionModeChange={onPermissionModeChange}
-        agentId={agentId}
-        onAgentChange={onAgentChange}
-        selectedToolId={selectedToolId}
-        onToolSelect={handleToolSelect}
-        panelOpen={panelOpen}
-        onTogglePanel={handleTogglePanel}
-        projects={projects}
-        projectId={projectId}
-        onProjectChange={onProjectChange}
-        onProjectCreated={onProjectCreated}
-        pendingApprovals={pendingApprovals}
-        onApprovalDecision={(runId, approvalId, action) =>
-          void handleApprovalDecision(runId, approvalId, action)
-        }
-        pendingAsks={pendingAsks}
-        onAskAnswer={(runId, askId, answers) =>
-          void handleAskAnswer(runId, askId, answers)
-        }
-        turnNote={turnNote}
-        onOpenLink={handleOpenLink}
-        onStop={handleStop}
-      />
-      {panelOpen ? (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          onMouseDown={handleResizeStart}
-          className="group relative hidden w-1 shrink-0 cursor-col-resize lg:block"
-        >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors group-hover:bg-primary/60 group-active:bg-primary" />
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/* 窗口标题栏（无边框）：横贯整个内容区。右侧面板展开时整体
+          位于这一行下方，面板标签条不会再与自绘窗口按钮争同一行。
+          空白处可拖拽移动窗口，双击最大化。 */}
+      <header
+        data-tauri-drag-region="deep"
+        className={cn(
+          "flex h-9 shrink-0 items-center justify-between gap-3 border-b px-4 select-none",
+          isTauriWindow() && windowControlsReserveClass,
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-1.5">
+          <SidebarPeekTrigger />
+          <h1 className="min-w-0 truncate text-sm font-medium">{title}</h1>
         </div>
-      ) : null}
-      {panelOpen ? (
-        <RightPanel
-          messages={tab === "tools" || tab === "usage" ? chat.messages : EMPTY_MESSAGES}
-          tasks={tasks}
-          tab={tab}
-          onTabChange={setTab}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleTogglePanel}
+          title={panelOpen ? "折叠面板" : "展开面板"}
+          aria-label={panelOpen ? "折叠面板" : "展开面板"}
+        >
+          {panelOpen ? (
+            <PanelRightCloseIcon className="size-4" />
+          ) : (
+            <PanelRightOpenIcon className="size-4" />
+          )}
+        </Button>
+      </header>
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <ChatPane
+          chat={chat}
+          providers={providers}
+          displaySelection={displaySelection}
+          onSelectionChange={onSelectionChange}
+          reasoningEffort={reasoningEffort}
+          onReasoningEffortChange={onReasoningEffortChange}
+          permissionMode={permissionMode}
+          onPermissionModeChange={onPermissionModeChange}
+          agentId={agentId}
+          onAgentChange={onAgentChange}
           selectedToolId={selectedToolId}
-          onToolSelect={setSelectedToolId}
-          width={panelWidth}
-          project={projects.find((candidate) => candidate.id === projectId)}
-          sessionId={sessionId}
-          busy={busy}
-          contextWindow={contextWindow}
-          previewTarget={previewTarget}
+          onToolSelect={handleToolSelect}
+          projects={projects}
+          projectId={projectId}
+          onProjectChange={onProjectChange}
+          onProjectCreated={onProjectCreated}
+          pendingApprovals={pendingApprovals}
+          onApprovalDecision={(runId, approvalId, action) =>
+            void handleApprovalDecision(runId, approvalId, action)
+          }
+          pendingAsks={pendingAsks}
+          onAskAnswer={(runId, askId, answers) =>
+            void handleAskAnswer(runId, askId, answers)
+          }
+          turnNote={turnNote}
           onOpenLink={handleOpenLink}
+          onStop={handleStop}
         />
-      ) : null}
-    </>
+        {panelOpen ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            onMouseDown={handleResizeStart}
+            className="group relative hidden w-1 shrink-0 cursor-col-resize lg:block"
+          >
+            <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors group-hover:bg-primary/60 group-active:bg-primary" />
+          </div>
+        ) : null}
+        {panelOpen ? (
+          <RightPanel
+            messages={tab === "tools" || tab === "usage" ? chat.messages : EMPTY_MESSAGES}
+            tasks={tasks}
+            tab={tab}
+            onTabChange={setTab}
+            selectedToolId={selectedToolId}
+            onToolSelect={setSelectedToolId}
+            width={panelWidth}
+            project={projects.find((candidate) => candidate.id === projectId)}
+            sessionId={sessionId}
+            busy={busy}
+            contextWindow={contextWindow}
+            previewTarget={previewTarget}
+            onOpenLink={handleOpenLink}
+          />
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -796,9 +839,74 @@ export function App() {
     }
   }
 
+  async function renameSession(id: string, title: string) {
+    try {
+      await updateSession(id, { title });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "重命名失败");
+    }
+    void refreshSessions();
+  }
+
+  async function toggleSessionPin(id: string, pinned: boolean) {
+    try {
+      await updateSession(id, { pinned });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "置顶失败");
+    }
+    void refreshSessions();
+  }
+
+  async function archiveSession(id: string) {
+    try {
+      await updateSession(id, { archived: true });
+      // 归档当前会话后侧栏不再展示它，切到新对话保持视图干净。
+      if (id === sessionId) startNewSession();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "归档失败");
+    }
+    void refreshSessions();
+  }
+
   async function deleteSession(id: string) {
-    await apiFetch(`/api/sessions/${id}`, { method: "DELETE" });
-    if (id === sessionId) startNewSession();
+    try {
+      await apiDeleteSession(id);
+      if (id === sessionId) startNewSession();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "删除会话失败");
+    }
+    void refreshSessions();
+  }
+
+  async function toggleProjectPin(id: string, pinned: boolean) {
+    try {
+      await updateProject(id, { pinned });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "置顶项目失败");
+    }
+    void refreshProjects();
+  }
+
+  async function archiveProject(id: string) {
+    try {
+      await updateProject(id, { archived: true });
+      // 归档当前项目后侧栏不再展示它，回到默认工作区。
+      if (id === projectId) handleSelectProject(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "归档项目失败");
+    }
+    void refreshProjects();
+    void refreshSessions();
+  }
+
+  async function deleteProject(id: string) {
+    try {
+      await apiDeleteProject(id);
+      if (id === projectId) handleSelectProject(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "删除项目失败");
+    }
+    void refreshProjects();
     void refreshSessions();
   }
 
@@ -815,7 +923,13 @@ export function App() {
         onSelect={selectSession}
         onNew={startNewSession}
         onNewInProject={startProjectSession}
+        onRename={(id, title) => void renameSession(id, title)}
+        onTogglePin={(id, pinned) => void toggleSessionPin(id, pinned)}
+        onArchive={(id) => void archiveSession(id)}
         onDelete={(id) => void deleteSession(id)}
+        onToggleProjectPin={(id, pinned) => void toggleProjectPin(id, pinned)}
+        onArchiveProject={(id) => void archiveProject(id)}
+        onDeleteProject={(id) => void deleteProject(id)}
         onProjectsChanged={refreshProjects}
         onOpenSettings={() => setView("settings")}
       />
@@ -827,6 +941,7 @@ export function App() {
               refreshProviders();
               refreshProjects();
               refreshAgents();
+              void refreshSessions();
             }}
           />
         ) : (
@@ -858,6 +973,8 @@ export function App() {
           </div>
         )}
       </SidebarInset>
+      {/* 无边框窗口的自绘控制按钮，固定在窗口右上角、浮于各顶栏之上。 */}
+      <WindowControls />
     </SidebarProvider>
   );
 }
