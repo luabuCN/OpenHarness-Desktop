@@ -70,6 +70,27 @@ OPENHARNESS_WEBSEARCH_API_KEY=tvly-...
 OPENHARNESS_WEBSEARCH_ENGINE=auto
 ```
 
+### 技能（Skills）
+
+参考 PI-Desktop 的目录式技能设计（SKILL.md 指令文档）。应用默认扫描本机的三个
+Agent CLI 技能目录，外加应用自己的自定义技能目录（可在「设置 → 技能」里增删改、
+按来源整体启停）：
+
+| 来源 | 目录 | 说明 |
+| --- | --- | --- |
+| 自定义 | `<数据目录>/skills/<id>/SKILL.md` | 在设置里创建，可编辑/删除 |
+| Claude | `~/.claude/skills/` | Claude Code 技能（支持符号链接） |
+| Codex | `~/.codex/skills/` | Codex 技能 |
+| cc-switch | `~/.cc-switch/skills/` | cc-switch 技能 |
+
+启用状态存在 SQLite（`SkillRecord` 表），同名技能按 自定义 > Claude > Codex >
+cc-switch 的优先级去重。启用后走两条通路：
+
+1. **自动发现**：技能目录注入 Mastra Agent，模型看到 `<available_skills>` 目录，
+   可通过内置 `skill` / `skill_read` 工具按需加载正文；
+2. **显式调用**：输入框输入 `/` 弹出技能菜单，选中后以 `/技能名 参数` 发送；
+   服务端在发给模型的副本里展开技能正文，聊天历史仍保留紧凑的命令文本。
+
 ## 安全边界
 
 - API 只监听 `127.0.0.1`

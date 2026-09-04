@@ -211,6 +211,18 @@ model ToolRecord {
   @@index([providerId])
 }
 
+/// 技能（SKILL.md 指令文档）的启用状态。key 形如 "<source>:<id>"；
+/// 名称/描述/路径等元数据始终来自磁盘实时扫描，这里只存用户偏好。
+model SkillRecord {
+  key       String   @id
+  source    String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([source])
+}
+
 /// One workspace file edit performed by an edit tool (writeFile/editFile).
 /// Rows power the changes panel (per-path latest wins) and one-click revert
 /// via the stored before snapshot. Run deletion keeps rows for the panel;

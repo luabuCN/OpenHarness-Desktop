@@ -1,6 +1,6 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { isToolUIPart } from "ai";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatUIMessage } from "@/lib/chat-utils";
 import { prepareAttachments } from "@/lib/attachments";
 import {
@@ -23,6 +23,7 @@ import {
   PromptInputActionAddAttachments,
   PromptInputActionMenu,
   PromptInputActionMenuContent,
+  PromptInputActionMenuItem,
   PromptInputActionMenuTrigger,
   PromptInputAttachments,
   PromptInputBody,
@@ -46,7 +47,9 @@ import type {
   ProviderInfo,
   ReasoningEffort,
   RunInfo,
+  SkillInfo,
 } from "@/api";
+import { listSkills } from "@/api";
 import { MessageView } from "./MessageView";
 import { MessageLinkContext } from "./ai-elements/message";
 import { ConversationMinimap } from "./ConversationMinimap";
@@ -56,6 +59,7 @@ import { ProjectSelector } from "./ProjectSelector";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 import { AskUserPrompt } from "./AskUserPrompt";
 import { PermissionModeSelector } from "./PermissionModeSelector";
+import { SlashSkillMenu } from "./SlashSkillMenu";
 
 const SUGGESTIONS = [
   "列出工作区中的文件",
@@ -194,6 +198,128 @@ export function ChatPane({
     [onOpenLink],
   );
 
+  // —— 输入框「/技能」斜杠菜单 ——
+  // 输入以 "/" 开头且光标仍在首词内时弹出；选中后把首词替换为 "/<id> "，
+  // 发送时由服务端展开技能正文（历史里保留紧凑的命令文本）。
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const dismissedTokenRef = useRef<string | null>(null);
+  const skillsFetchedAtRef = useRef(0);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [slash, setSlash] = useState<{ open: boolean; query: string }>({ open: false, query: "" });
+  const [slashHighlight, setSlashHighlight] = useState(0);
+
+  const refreshSkills = useCallback(async () => {
+    try {
+      const { skills: next } = await listSkills();
+      setSkills(next.filter((item) => item.enabled));
+    } catch {
+      // 技能目录读取失败不影响聊天输入
+    } finally {
+      skillsFetchedAtRef.current = Date.now();
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSkills();
+  }, [refreshSkills]);
+
+  const filteredSkills = useMemo(() => {
+    if (!slash.open) return [];
+    const query = slash.query.toLowerCase();
+    if (!query) return skills.slice(0, 8);
+    return skills
+      .filter(
+        (item) =>
+          item.id.toLowerCase().includes(query) || item.name.toLowerCase().includes(query),
+      )
+      .slice(0, 8);
+  }, [slash.open, slash.query, skills]);
+  const slashMenuOpen = slash.open && filteredSkills.length > 0;
+
+  // 输入变化/光标移动时重新判定触发词。
+  const syncSlash = useCallback((el: HTMLTextAreaElement) => {
+    const pos = el.selectionStart ?? el.value.length;
+    const token = el.value.slice(0, pos);
+    if (token.startsWith("/") && !/\s/.test(token)) {
+      if (dismissedTokenRef.current === token) return;
+      const query = token.slice(1);
+      setSlash((prev) => (prev.open && prev.query === query ? prev : { open: true, query }));
+    } else {
+      dismissedTokenRef.current = null;
+      setSlash((prev) => (prev.open ? { open: false, query: "" } : prev));
+    }
+  }, []);
+
+  useEffect(() => {
+    setSlashHighlight(0);
+  }, [slash.query]);
+
+  const acceptSkill = useCallback((skill: SkillInfo) => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const pos = el.selectionStart ?? el.value.length;
+    el.value = `/${skill.id} ${el.value.slice(pos)}`;
+    const caret = skill.id.length + 2;
+    el.setSelectionRange(caret, caret);
+    dismissedTokenRef.current = null;
+    setSlash({ open: false, query: "" });
+  }, []);
+
+  const handleTextareaEvent = useCallback(
+    (event: React.SyntheticEvent<HTMLTextAreaElement>) => {
+      syncSlash(event.currentTarget);
+    },
+    [syncSlash],
+  );
+
+  const handleTextareaFocus = useCallback(
+    (event: React.FocusEvent<HTMLTextAreaElement>) => {
+      syncSlash(event.currentTarget);
+      // 设置页增删技能后回到聊天，聚焦时刷新目录（限频）。
+      if (Date.now() - skillsFetchedAtRef.current > 5_000) void refreshSkills();
+    },
+    [syncSlash, refreshSkills],
+  );
+
+  const handleSlashKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (!slashMenuOpen || event.nativeEvent.isComposing) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        setSlashHighlight(
+          (current) => (current + delta + filteredSkills.length) % filteredSkills.length,
+        );
+      } else if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
+      ) {
+        event.preventDefault();
+        const target = filteredSkills[slashHighlight] ?? filteredSkills[0];
+        if (target) acceptSkill(target);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        const el = textareaRef.current;
+        dismissedTokenRef.current = el
+          ? el.value.slice(0, el.selectionStart ?? el.value.length)
+          : null;
+        setSlash({ open: false, query: "" });
+      }
+    },
+    [slashMenuOpen, filteredSkills, slashHighlight, acceptSkill],
+  );
+
+  // 加号菜单里的「输入 / 选择技能」：聚焦输入框并进入斜杠选择状态。
+  const openSlashFromMenu = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (!el.value.startsWith("/")) el.value = `/${el.value}`;
+    el.focus();
+    el.setSelectionRange(1, 1);
+    dismissedTokenRef.current = null;
+    syncSlash(el);
+  }, [syncSlash]);
+
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-background">
       {/* 与右侧面板的标签栏（h-9）保持同一高度，顶部分隔线才对齐。 */}
@@ -284,10 +410,20 @@ export function ChatPane({
               />
             </div>
           ) : null}
+          <div className="relative">
+            {slashMenuOpen ? (
+              <SlashSkillMenu
+                items={filteredSkills}
+                highlight={Math.min(slashHighlight, filteredSkills.length - 1)}
+                onHighlightChange={setSlashHighlight}
+                onAccept={acceptSkill}
+              />
+            ) : null}
           <PromptInput
             className="w-full rounded-xl border bg-card shadow-sm"
             onSubmit={async ({ text, files }) => {
               if (busy || (!text.trim() && files.length === 0)) return;
+              setSlash({ open: false, query: "" });
               // 发送前处理附件：压缩大图。其余类型（PDF/Word/表格等）原样
               // 发送，服务端会落盘并把路径告诉模型。
               const prepared = await prepareAttachments(files);
@@ -319,7 +455,16 @@ export function ChatPane({
               ) : null}
               <PromptInputAttachments />
               <AttachmentVisionHint acceptsImages={modelAcceptsImages} />
-              <PromptInputTextarea />
+              <PromptInputTextarea
+                ref={textareaRef}
+                placeholder="有什么可以帮忙的？输入 / 选择技能"
+                onChange={handleTextareaEvent}
+                onClick={handleTextareaEvent}
+                onKeyUp={handleTextareaEvent}
+                onSelect={handleTextareaEvent}
+                onFocus={handleTextareaFocus}
+                onKeyDown={handleSlashKeyDown}
+              />
             </PromptInputBody>
             <PromptInputFooter>
               <PromptInputTools>
@@ -327,6 +472,10 @@ export function ChatPane({
                   <PromptInputActionMenuTrigger tooltip="添加附件" />
                   <PromptInputActionMenuContent>
                     <PromptInputActionAddAttachments />
+                    <PromptInputActionMenuItem onSelect={openSlashFromMenu}>
+                      <SparklesIcon className="mr-2 size-4" />
+                      输入 / 选择技能
+                    </PromptInputActionMenuItem>
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
                 <AgentSelector value={agentId} onChange={onAgentChange} />
@@ -355,6 +504,7 @@ export function ChatPane({
               />
             </PromptInputFooter>
           </PromptInput>
+          </div>
         </div>
       </div>
     </section>

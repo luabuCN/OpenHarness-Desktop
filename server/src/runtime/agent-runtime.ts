@@ -6,7 +6,7 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
 } from "ai";
-import { config, skillsDir, workspaceDir } from "../env.js";
+import { config, workspaceDir } from "../env.js";
 import { prisma } from "../db.js";
 import {
   resolveConfiguredSelection,
@@ -19,6 +19,7 @@ import { DelegationHub, type DelegationNotice } from "./delegation-hub.js";
 import { createModel } from "./model.js";
 import { runService } from "./run-service.js";
 import { runHub } from "./run-hub.js";
+import { skillService } from "./skills.js";
 import { subAgentService } from "./subagents.js";
 import {
   parseToolPermissionMap,
@@ -158,6 +159,10 @@ class AgentRuntimeService {
       // 显式推理等级优先；旧客户端的 thinkingMode=deep 视为开启深度思考。
       const deepThinking = reasoningEffort ? reasoningEffort !== "off" : mode === "deep";
 
+      // 已启用技能逐目录注入：Mastra 负责注入 <available_skills> 目录与
+      // skill / skill_read 工具；同名冲突已在服务层按来源优先级去重。
+      const activeSkills = await skillService.activeSkills();
+
       const agent = new Agent({
         id: definition.id,
         name: definition.name,
@@ -168,7 +173,7 @@ class AgentRuntimeService {
             : definition.instructions,
         model,
         tools,
-        skills: [skillsDir],
+        skills: activeSkills.map((skill) => skill.dir),
         maxRetries: 3,
         inputProcessors: [new TokenLimiterProcessor({ limit: config.contextWindow })],
         defaultOptions: { maxSteps },
@@ -176,10 +181,13 @@ class AgentRuntimeService {
 
       // 非图片附件（PDF/Word/表格等）先落盘到工作区 attachments/，模型
       // 副本里替换为路径提示；UI 消息保持原 file part，回显不受影响。
-      const { messages: modelBoundMessages } = await materializeAttachments(
+      const { messages: attachmentBound } = await materializeAttachments(
         messages,
         rootPath ?? workspaceDir,
       );
+      // "/<技能 id> 参数" 的显式调用同样只展开在模型副本里，历史回显保持
+      // 紧凑的斜杠命令文本。
+      const modelBoundMessages = await skillService.applyInvocation(attachmentBound);
       const modelMessages = await convertToModelMessages(modelBoundMessages, {
         ignoreIncompleteToolCalls: true,
       });

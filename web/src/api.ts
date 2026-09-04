@@ -285,6 +285,60 @@ export function deleteSubAgent(id: string): Promise<void> {
   return apiFetch(`/api/subagents/${id}`, { method: "DELETE" }).then(() => undefined);
 }
 
+export type SkillSource = "custom" | "claude" | "codex" | "ccswitch";
+
+export interface SkillInfo {
+  key: string;
+  source: SkillSource;
+  id: string;
+  name: string;
+  description?: string;
+  dir: string;
+  path: string;
+  enabled: boolean;
+  isCustom: boolean;
+}
+
+export interface SkillSourceInfo {
+  source: SkillSource;
+  label: string;
+  dir: string;
+  exists: boolean;
+}
+
+export interface SkillInput {
+  name?: string;
+  description?: string;
+  body?: string;
+  enabled?: boolean;
+}
+
+export function listSkills(): Promise<{ skills: SkillInfo[]; sources: SkillSourceInfo[] }> {
+  return apiFetch<{ skills: SkillInfo[]; sources: SkillSourceInfo[] }>("/api/skills");
+}
+
+export function createSkill(input: { name: string; description?: string; body: string }): Promise<SkillInfo> {
+  return apiFetch<{ skill: SkillInfo }>("/api/skills", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }).then((data) => data.skill);
+}
+
+export function readSkillBody(key: string): Promise<{ name: string; description?: string; body: string }> {
+  return apiFetch(`/api/skills/${encodeURIComponent(key)}/body`);
+}
+
+export function updateSkill(key: string, input: SkillInput): Promise<SkillInfo> {
+  return apiFetch<{ skill: SkillInfo }>(`/api/skills/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }).then((data) => data.skill);
+}
+
+export function deleteSkill(key: string): Promise<void> {
+  return apiFetch(`/api/skills/${encodeURIComponent(key)}`, { method: "DELETE" }).then(() => undefined);
+}
+
 export interface AgentInfo {
   id: string;
   name: string;

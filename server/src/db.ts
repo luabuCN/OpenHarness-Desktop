@@ -301,6 +301,19 @@ export async function ensureSchema() {
   await prisma.$executeRawUnsafe(
     'CREATE INDEX IF NOT EXISTS "SubAgentDefinition_isActive_idx" ON "SubAgentDefinition" ("isActive")',
   );
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "SkillRecord" (
+      "key" TEXT NOT NULL PRIMARY KEY,
+      "source" TEXT NOT NULL,
+      "enabled" BOOLEAN NOT NULL DEFAULT true,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" DATETIME NOT NULL
+    )
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "SkillRecord_source_idx" ON "SkillRecord" ("source")',
+  );
+
   for (const agent of builtInAgentRows()) {
     await prisma.agentConfig.upsert({
       where: { id: agent.id },
