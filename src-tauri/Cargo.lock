@@ -949,7 +949,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eva-ai"
+name = "eva-desktop"
 version = "0.1.0"
 dependencies = [
  "serde",

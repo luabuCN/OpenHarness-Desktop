@@ -64,6 +64,13 @@ fs.writeFileSync(
 run("node", ["--experimental-sea-config", "sea/sea-config.json"], serverDir);
 fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
 fs.copyFileSync(process.execPath, sidecarPath);
+// copyFileSync 不保留权限位，Linux/macOS 上需要显式加可执行位
+fs.chmodSync(sidecarPath, 0o755);
+
+// macOS 的 Node 二进制带官方签名，postject 注入前必须先移除，否则产物会被系统拒绝执行
+if (process.platform === "darwin") {
+  run("codesign", ["--remove-signature", sidecarPath]);
+}
 
 const postjectEnvironment = {
   ...process.env,
@@ -91,5 +98,6 @@ if (postject.status !== 0) {
 
 fs.mkdirSync(binariesDir, { recursive: true });
 fs.copyFileSync(sidecarPath, path.join(binariesDir, `open-harness-sidecar-${target}${extension}`));
+fs.chmodSync(path.join(binariesDir, `open-harness-sidecar-${target}${extension}`), 0o755);
 
 console.log(`Prepared Tauri sidecar for ${target}`);

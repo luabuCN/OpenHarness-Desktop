@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for the eva ai desktop window",
+  "description": "Default permissions for the Eva Desktop main window",
   "windows": ["main"],
   "permissions": [
     "core:default",

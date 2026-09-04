@@ -12,3 +12,5 @@ server/.local-data*/
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 src-tauri/target/
+# 本机 Cargo 代理配置，勿提交（CI 上没有该代理，提交会导致依赖下载失败）
+src-tauri/.cargo/config.toml

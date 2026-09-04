@@ -1,7 +1,7 @@
 [package]
-name = "eva-ai"
+name = "eva-desktop"
 version = "0.1.0"
-description = "eva ai local desktop client"
+description = "Eva Desktop - local-first AI agent desktop client"
 edition = "2021"
 rust-version = "1.88"
 
